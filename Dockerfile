@@ -13,6 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY gunicorn.conf.py .
 
+RUN mkdir -p /app/data/uploads && chown -R app:app /app/data
+
 USER app
 
 EXPOSE 8000

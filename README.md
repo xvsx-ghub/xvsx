@@ -1,6 +1,6 @@
-# Server Template
+# xvsx — Shelfa
 
-Production stack: **Internet → Nginx → Gunicorn (Uvicorn workers) → FastAPI**
+Production stack: **Internet → Nginx → Gunicorn (Uvicorn workers) → FastAPI (Shelfa)**
 
 ```
 Internet
@@ -9,7 +9,7 @@ Internet
    |
  Gunicorn + UvicornWorker (port 8000, internal)
    |
- FastAPI app
+ FastAPI app (Shelfa chat API)
 ```
 
 ## Quick start (Docker)
@@ -18,7 +18,7 @@ Internet
 docker compose up --build
 ```
 
-- http://localhost/ — API root
+- http://localhost/ — Shelfa home
 - http://localhost/health — health check
 - http://localhost/docs — OpenAPI docs
 
@@ -45,16 +45,25 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 | `GUNICORN_WORKERS` | `2 × CPU + 1` | Worker processes |
 | `GUNICORN_TIMEOUT` | `120` | Request timeout (seconds) |
 | `GUNICORN_LOG_LEVEL` | `info` | Log level |
+| `DATA_DIR` | `./data` | SQLite DB and uploads directory |
+| `FIREBASE_CREDENTIALS_PATH` | `./shelf-*-firebase-adminsdk-*.json` | Firebase service account for push notifications |
 
 ## Project layout
 
 ```
 .
 ├── app/
-│   └── main.py          # FastAPI application
+│   ├── main.py              # FastAPI entry point
+│   └── shelfa/              # Shelfa chat application
+│       ├── config.py
+│       ├── database.py
+│       ├── routers/
+│       ├── services/
+│       └── templates/
+├── data/                    # Runtime data (DB + uploads)
 ├── nginx/
-│   └── nginx.conf       # Reverse proxy config
-├── gunicorn.conf.py     # Gunicorn + Uvicorn workers
+│   └── nginx.conf
+├── gunicorn.conf.py
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt

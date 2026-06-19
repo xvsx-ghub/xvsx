@@ -6,3 +6,7 @@ venv/
 *.egg-info/
 dist/
 build/
+data/chat.db
+data/uploads/*
+!data/uploads/.gitkeep
+*-firebase-adminsdk-*.json

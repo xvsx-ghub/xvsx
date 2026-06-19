@@ -1,0 +1,21 @@
+from fastapi import APIRouter, Query
+
+from app.shelfa.schemas import IdentityCheckResponse, IdentityValidateResponse
+from app.shelfa.services.identity import check_nickname_exists, register_identity
+
+router = APIRouter(prefix="/api/identity", tags=["identity"])
+
+
+@router.get("/validate", response_model=IdentityValidateResponse)
+def identity_validate(
+    device_id: str = Query(...),
+    nickname: str = Query(...),
+):
+    if register_identity(nickname=nickname, device_id=device_id):
+        return {"valid": True}
+    return {"valid": False}
+
+
+@router.get("/check", response_model=IdentityCheckResponse)
+def identity_check(nickname: str = Query(...)):
+    return {"exists": check_nickname_exists(nickname)}
