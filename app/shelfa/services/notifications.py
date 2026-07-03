@@ -1,23 +1,47 @@
 from typing import Optional
 
-import firebase_admin
-from firebase_admin import credentials, messaging
-
 from app.shelfa.config import FIREBASE_AUTH_PATH
+
+_firebase_admin = None
+_firebase_credentials = None
+_firebase_messaging = None
+
+
+def _ensure_firebase_modules() -> None:
+    global _firebase_admin, _firebase_credentials, _firebase_messaging
+    if _firebase_admin is not None or _firebase_messaging is not None:
+        return
+
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, messaging
+    except ModuleNotFoundError:
+        _firebase_admin = None
+        _firebase_credentials = None
+        _firebase_messaging = None
+        return
+
+    _firebase_admin = firebase_admin
+    _firebase_credentials = credentials
+    _firebase_messaging = messaging
 
 
 def init_firebase() -> bool:
-    if firebase_admin._apps:
+    _ensure_firebase_modules()
+    if _firebase_admin is None:
+        return False
+    if _firebase_admin._apps:
         return False
     if not FIREBASE_AUTH_PATH.is_file():
         return False
-    cred = credentials.Certificate(FIREBASE_AUTH_PATH)
-    firebase_admin.initialize_app(cred)
+    cred = _firebase_credentials.Certificate(FIREBASE_AUTH_PATH)
+    _firebase_admin.initialize_app(cred)
     return True
 
 
 def is_firebase_ready() -> bool:
-    return bool(firebase_admin._apps)
+    _ensure_firebase_modules()
+    return bool(_firebase_admin and _firebase_admin._apps)
 
 
 def _fcm_data_payload(data: Optional[dict], *, notification_kind: str) -> dict[str, str]:
@@ -29,6 +53,13 @@ def _fcm_data_payload(data: Optional[dict], *, notification_kind: str) -> dict[s
     return out
 
 
+def _get_messaging():
+    _ensure_firebase_modules()
+    if _firebase_messaging is None:
+        raise RuntimeError("firebase_admin is not available")
+    return _firebase_messaging
+
+
 def send_alert_notification(
     token: str,
     title: str,
@@ -36,6 +67,7 @@ def send_alert_notification(
     data: Optional[dict] = None,
     badge: Optional[int] = None,
 ) -> str:
+    messaging = _get_messaging()
     payload = _fcm_data_payload(data, notification_kind="alert")
     if badge is not None:
         payload["badge"] = str(int(badge))
@@ -64,6 +96,7 @@ def send_background_notification(
     data: dict,
     badge: Optional[int] = None,
 ) -> str:
+    messaging = _get_messaging()
     payload = _fcm_data_payload(data, notification_kind="background")
     if badge is not None:
         payload["badge"] = str(int(badge))
