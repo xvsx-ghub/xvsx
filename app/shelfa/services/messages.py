@@ -173,11 +173,11 @@ def get_token_by_nickname(nickname: str) -> Optional[str]:
             SELECT token FROM device_tokens
             WHERE device_id IN (
                 SELECT device_id FROM messages
-                WHERE nickname = ?
+                WHERE nickname = ? OR client_name = ?
                 ORDER BY id DESC LIMIT 1
             )
             """,
-            (nickname,),
+            (nickname, nickname),
         ).fetchone()
     return row["token"] if row else None
 
@@ -185,8 +185,12 @@ def get_token_by_nickname(nickname: str) -> Optional[str]:
 def get_device_id_by_nickname(nickname: str) -> Optional[str]:
     with get_db() as conn:
         row = conn.execute(
-            "SELECT device_id FROM messages WHERE nickname = ? ORDER BY id DESC LIMIT 1",
-            (nickname,),
+            """
+            SELECT device_id FROM messages
+            WHERE nickname = ? OR client_name = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (nickname, nickname),
         ).fetchone()
     return row["device_id"] if row else None
 

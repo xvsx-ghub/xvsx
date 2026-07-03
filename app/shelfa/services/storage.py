@@ -76,16 +76,26 @@ def _vacuum_db() -> None:
 def enforce_data_limit() -> None:
     if not DATA_DIR.is_dir():
         return
+
+    total = total_data_bytes()
     pruned = False
-    for _ in range(1_000_000):
-        if total_data_bytes() <= MAX_DATA_BYTES:
+
+    for _ in range(10_000):
+        if total <= MAX_DATA_BYTES:
             break
+
         if _delete_oldest_message_row():
             pruned = True
-        elif _delete_oldest_orphan_file():
+            total = total_data_bytes()
+            continue
+
+        if _delete_oldest_orphan_file():
             pruned = True
-        else:
-            break
+            total = total_data_bytes()
+            continue
+
+        break
+
     if pruned:
         _vacuum_db()
 
