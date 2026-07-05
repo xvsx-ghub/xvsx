@@ -190,10 +190,10 @@ def get_device_id_by_nickname(nickname: str) -> Optional[str]:
         row = conn.execute(
             """
             SELECT device_id FROM messages
-            WHERE nickname = ? OR client_name = ?
+            WHERE nickname = ?
             ORDER BY id DESC LIMIT 1
             """,
-            (nickname, nickname),
+            (nickname,),
         ).fetchone()
     return row["device_id"] if row else None
 
