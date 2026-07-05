@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 from typing import Optional
+import logging
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
@@ -28,6 +29,7 @@ from app.shelfa.services.notifications import is_firebase_ready, send_alert_noti
 from app.shelfa.services.storage import enforce_data_limit, save_upload
 
 router = APIRouter(prefix="/api", tags=["messages"])
+logger = logging.getLogger(__name__)
 
 
 def _notify_recipient(
@@ -53,6 +55,13 @@ def _notify_recipient(
             body=body,
             data={"type": "chat_message"},
             badge=badge_count,
+        )
+        logger.info(
+            f"Notification sent. Token: {token}, Firebase ready: {is_firebase_ready()}"
+        )
+    else:
+        logger.warning(
+            f"Notification not sent. Token: {token}, Firebase ready: {is_firebase_ready()}"
         )
 
 
