@@ -1,6 +1,10 @@
+import json
+import logging
 from typing import Optional
 
 from app.shelfa.config import FIREBASE_AUTH_PATH
+
+logger = logging.getLogger(__name__)
 
 _firebase_admin = None
 _firebase_credentials = None
@@ -26,16 +30,42 @@ def _ensure_firebase_modules() -> None:
     _firebase_messaging = messaging
 
 
+def _log_credentials_summary() -> None:
+    if not FIREBASE_AUTH_PATH.is_file():
+        logger.warning("Firebase credentials file not found at %s", FIREBASE_AUTH_PATH)
+        return
+
+    try:
+        with FIREBASE_AUTH_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        logger.info(
+            "Firebase credentials loaded: path=%s project_id=%s client_email=%s",
+            FIREBASE_AUTH_PATH,
+            payload.get("project_id"),
+            payload.get("client_email"),
+        )
+    except Exception as exc:  # pragma: no cover - diagnostic path
+        logger.warning("Unable to read Firebase credentials metadata: %s", exc)
+
+
 def init_firebase() -> bool:
+    logger.info("Initializing Firebase...")
+
     _ensure_firebase_modules()
     if _firebase_admin is None:
+        logger.warning("Firebase Admin SDK is not available. Notifications will be disabled.")
         return False
     if _firebase_admin._apps:
+        logger.info("Firebase already initialized.")
         return False
     if not FIREBASE_AUTH_PATH.is_file():
+        logger.warning("Firebase credentials file not found at %s", FIREBASE_AUTH_PATH)
         return False
+
+    _log_credentials_summary()
     cred = _firebase_credentials.Certificate(FIREBASE_AUTH_PATH)
     _firebase_admin.initialize_app(cred)
+    logger.info("Firebase initialized successfully.")
     return True
 
 
@@ -60,6 +90,15 @@ def _get_messaging():
     return _firebase_messaging
 
 
+def _validate_fcm_token(token: str) -> str:
+    token = token.strip()
+    if not token:
+        raise ValueError("FCM token is empty")
+    if len(token) < 20:
+        raise ValueError("FCM token is too short")
+    return token
+
+
 def send_alert_notification(
     token: str,
     title: str,
@@ -67,6 +106,7 @@ def send_alert_notification(
     data: Optional[dict] = None,
     badge: Optional[int] = None,
 ) -> str:
+    token = _validate_fcm_token(token)
     messaging = _get_messaging()
     payload = _fcm_data_payload(data, notification_kind="alert")
     if badge is not None:
@@ -88,7 +128,12 @@ def send_alert_notification(
             payload=messaging.APNSPayload(aps=messaging.Aps(**aps_kwargs)),
         ),
     )
-    return messaging.send(message)
+    try:
+        logger.info("Sending FCM alert notification to token = %s", token)
+        return messaging.send(message)
+    except Exception as exc:  # pragma: no cover - runtime integration path
+        logger.exception("FCM alert send failed: %s", exc)
+        raise
 
 
 def send_background_notification(
@@ -96,6 +141,7 @@ def send_background_notification(
     data: dict,
     badge: Optional[int] = None,
 ) -> str:
+    token = _validate_fcm_token(token)
     messaging = _get_messaging()
     payload = _fcm_data_payload(data, notification_kind="background")
     if badge is not None:
@@ -131,4 +177,9 @@ def send_background_notification(
         android=messaging.AndroidConfig(priority="high"),
         apns=apns,
     )
-    return messaging.send(message)
+    try:
+        logger.info("Sending FCM background notification to token prefix=%s", token[:12])
+        return messaging.send(message)
+    except Exception as exc:  # pragma: no cover - runtime integration path
+        logger.exception("FCM background send failed: %s", exc)
+        raise

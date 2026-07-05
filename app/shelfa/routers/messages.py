@@ -49,19 +49,28 @@ def _notify_recipient(
 
     token = get_token_by_nickname(nickname=client_name)
     if token is not None and is_firebase_ready():
-        send_alert_notification(
-            token=token,
-            title=sender_nickname,
-            body=body,
-            data={"type": "chat_message"},
-            badge=badge_count,
-        )
-        logger.info(
-            f"Notification sent. Token: {token}, Firebase ready: {is_firebase_ready()}"
-        )
+        try:
+            send_alert_notification(
+                token=token,
+                title=sender_nickname,
+                body=body,
+                data={"type": "chat_message"},
+                badge=badge_count,
+            )
+            logger.info(
+                "Notification sent. Sender nickname: %s, Client name: %s, Token = %s, Firebase ready: %s",
+                sender_nickname,
+                client_name,
+                token,
+                is_firebase_ready(),
+            )
+        except Exception as exc:
+            logger.warning("Notification send failed: %s", exc)
     else:
         logger.warning(
-            f"Notification not sent. Token: {token}, Firebase ready: {is_firebase_ready()}"
+            "Notification not sent. Token: %s, Firebase ready: %s",
+            bool(token),
+            is_firebase_ready(),
         )
 
 

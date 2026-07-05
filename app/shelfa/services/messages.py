@@ -172,13 +172,16 @@ def get_token_by_nickname(nickname: str) -> Optional[str]:
             """
             SELECT token FROM device_tokens
             WHERE device_id IN (
-                SELECT device_id FROM messages
-                WHERE nickname = ? OR client_name = ?
-                ORDER BY id DESC LIMIT 1
+                SELECT device_id
+                FROM messages
+                WHERE nickname = ?
+                ORDER BY id DESC
+                LIMIT 1
             )
             """,
-            (nickname, nickname),
+            (nickname,),
         ).fetchone()
+
     return row["token"] if row else None
 
 
