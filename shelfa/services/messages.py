@@ -2,8 +2,8 @@ from typing import Optional
 
 import sqlite3
 
-from app.shelfa.database import get_db
-from app.shelfa.services.storage import utc_now_iso
+from shelfa.database import get_db
+from shelfa.services.storage import utc_now_iso
 
 
 def normalize_device_id(raw: Optional[str]) -> str:

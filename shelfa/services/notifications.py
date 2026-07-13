@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Optional
 
-from app.shelfa.config import FIREBASE_AUTH_PATH
+from shelfa.config import FIREBASE_AUTH_PATH
 
 logger = logging.getLogger(__name__)
 

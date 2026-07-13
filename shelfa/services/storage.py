@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from app.shelfa.config import DATA_DIR, DB_PATH, UPLOAD_DIR, MAX_DATA_BYTES
-from app.shelfa.database import get_db
+from shelfa.config import DATA_DIR, DB_PATH, UPLOAD_DIR, MAX_DATA_BYTES
+from shelfa.database import get_db
 
 
 def utc_now_iso() -> str:

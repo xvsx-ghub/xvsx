@@ -1,12 +1,9 @@
 from pathlib import Path
-
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-
-from app.shelfa.config import UPLOAD_DIR
+from shelfa.config import UPLOAD_DIR
 
 router = APIRouter(tags=["files"])
-
 
 @router.get("/files/{name}")
 def serve_file(name: str):

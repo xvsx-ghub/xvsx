@@ -3,15 +3,11 @@ from pathlib import Path
 from typing import Optional
 import logging
 
-ROOT_DIR = Path(__file__).resolve().parents[3]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
-from app.shelfa.config import ALLOWED_EXTENSIONS, EXTENSION_TO_KIND, MAX_UPLOAD_BYTES
-from app.shelfa.schemas import MessageResponse, MessagesListResponse, PostMessageRequest
-from app.shelfa.services.messages import (
+from shelfa.config import ALLOWED_EXTENSIONS, EXTENSION_TO_KIND, MAX_UPLOAD_BYTES
+from shelfa.schemas import MessageResponse, MessagesListResponse, PostMessageRequest
+from shelfa.services.messages import (
     clear_unread_for_thread,
     get_device_id_by_nickname,
     get_token_by_nickname,
@@ -25,8 +21,8 @@ from app.shelfa.services.messages import (
     row_to_message,
     total_unread_for_device,
 )
-from app.shelfa.services.notifications import is_firebase_ready, send_alert_notification
-from app.shelfa.services.storage import enforce_data_limit, save_upload
+from shelfa.services.notifications import is_firebase_ready, send_alert_notification
+from shelfa.services.storage import enforce_data_limit, save_upload
 
 router = APIRouter(prefix="/api", tags=["messages"])
 logger = logging.getLogger(__name__)

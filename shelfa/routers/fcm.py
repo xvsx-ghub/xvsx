@@ -1,10 +1,8 @@
 from fastapi import APIRouter, HTTPException
-
-from app.shelfa.schemas import FcmRegisterRequest, OkResponse
-from app.shelfa.services.messages import normalize_device_id, upsert_device_token
+from shelfa.schemas import FcmRegisterRequest, OkResponse
+from shelfa.services.messages import normalize_device_id, upsert_device_token
 
 router = APIRouter(prefix="/api/fcm", tags=["fcm"])
-
 
 @router.post("/register", response_model=OkResponse)
 def register_fcm_token(body: FcmRegisterRequest):

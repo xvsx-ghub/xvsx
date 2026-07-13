@@ -2,14 +2,12 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Generator
 
-from app.shelfa.config import DATA_DIR, DB_PATH, UPLOAD_DIR
-
+from app.shelfa.config import DB_PATH
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 @contextmanager
 def get_db() -> Generator[sqlite3.Connection, None, None]:
@@ -19,10 +17,7 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
     finally:
         conn.close()
 
-
 def init_db() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
         conn.execute(
             """

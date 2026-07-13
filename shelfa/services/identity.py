@@ -1,5 +1,5 @@
-from app.shelfa.database import get_db
-from app.shelfa.services.messages import (
+from shelfa.database import get_db
+from shelfa.services.messages import (
     get_device_id_by_nickname,
     insert_text_message,
     normalize_device_id,
