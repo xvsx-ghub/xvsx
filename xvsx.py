@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-import shelfa.shelfa as shelfa
+import shelfa.shelfa as shelfaApp
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Shelfa...")
 
     try:
-        shelfa.init_shelfa(app)
+        shelfaApp.init_shelfa(app)
         logger.info("Shelfa initialized successfully.")
     except Exception:
         logger.exception("Exception during Shelfa initialization")

@@ -2,7 +2,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Generator
 
-from app.shelfa.config import DB_PATH
+from shelfa.config import DB_PATH
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
