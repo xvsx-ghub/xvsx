@@ -21,11 +21,11 @@ from shelfa.services.messages import (
     row_to_message,
     total_unread_for_device,
 )
-from shelfa.services.notifications import is_firebase_ready, send_alert_notification
+from shelfa.services.notifications import send_alert_notification
 from shelfa.services.storage import enforce_data_limit, save_upload
 
 router = APIRouter(prefix="/api", tags=["messages"])
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("xvsx")
 
 
 def _notify_recipient(
@@ -44,7 +44,7 @@ def _notify_recipient(
         badge_count = total_unread_for_device(device_id=target_device_id)
 
     token = get_token_by_nickname(nickname=client_name)
-    if token is not None and is_firebase_ready():
+    if token is not None:
         try:
             send_alert_notification(
                 token=token,
@@ -54,19 +54,16 @@ def _notify_recipient(
                 badge=badge_count,
             )
             logger.info(
-                "Notification sent. Sender nickname: %s, Client name: %s, Token = %s, Firebase ready: %s",
+                "Notification sent. Sender nickname: %s, Client name: %s, Token = %s",
                 sender_nickname,
                 client_name,
-                token,
-                is_firebase_ready(),
-            )
+                token,            )
         except Exception as exc:
             logger.warning("Notification send failed: %s", exc)
     else:
         logger.warning(
             "Notification not sent. Token: %s, Firebase ready: %s",
             bool(token),
-            is_firebase_ready(),
         )
 
 
@@ -78,6 +75,15 @@ def list_messages(
     device_id: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=200),
 ):
+    logger.info(
+        "Listing messages. after_id: %s, nickname: %s, client_name: %s, device_id: %s, limit: %d",
+        after_id,
+        nickname,
+        client_name,
+        device_id,
+        limit,
+    )
+    
     normalized_device_id = normalize_device_id(device_id)
 
     if after_id is not None and not message_exists(after_id):
@@ -101,6 +107,8 @@ def list_messages(
             "messages": [row_to_message(row) for row in rows],
             "unread_count": total_unread_for_device(normalized_device_id),
         }
+        
+    logger.info("nickname and client_name are both None, returning empty messages list")
 
     return {
         "messages": [],
