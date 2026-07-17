@@ -9,6 +9,7 @@ class PostMessageRequest(BaseModel):
     nickname: str = "anonymous"
     device_id: str = "anonymous"
     client_name: str = "anonymous"
+    group_flag: str = "0"
     text: str
 
 class MessageResponse(BaseModel):
@@ -16,6 +17,7 @@ class MessageResponse(BaseModel):
     nickname: str
     client_name: str
     device_id: str
+    group_flag: str
     kind: str
     text: Optional[str] = None
     file_url: Optional[str] = None
