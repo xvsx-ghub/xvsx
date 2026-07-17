@@ -26,6 +26,7 @@ def init_db() -> None:
                 nickname TEXT NOT NULL DEFAULT 'anonymous',
                 device_id TEXT NOT NULL DEFAULT 'anonymous',
                 client_name TEXT NOT NULL DEFAULT 'anonymous',
+                group_flag TEXT NOT NULL DEFAULT '0',
                 kind TEXT NOT NULL,
                 text_content TEXT,
                 stored_name TEXT,

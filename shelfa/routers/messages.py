@@ -119,6 +119,7 @@ def list_messages(
 @router.post("/messages", response_model=MessageResponse, status_code=201)
 def post_message(body: PostMessageRequest):
     nickname = (body.nickname or "anonymous").strip()[:64] or "anonymous"
+    group_flag = (body.group_flag or "0").strip()[:1] or "0"
     device_id = (body.device_id or "anonymous").strip()[:64] or "anonymous"
     client_name = (body.client_name or "anonymous").strip()[:64] or "anonymous"
     text = (body.text or "").strip()
@@ -128,6 +129,7 @@ def post_message(body: PostMessageRequest):
 
     row = insert_text_message(
         nickname=nickname,
+        group_flag=group_flag,
         device_id=device_id,
         client_name=client_name,
         text=text,
@@ -140,11 +142,13 @@ def post_message(body: PostMessageRequest):
 @router.post("/upload", response_model=MessageResponse, status_code=201)
 async def upload_file(
     nickname: str = Form("guest"),
+    group_flag: str = Form("0"),
     device_id: str = Form("anonymous"),
     client_name: str = Form("anonymous"),
     file: UploadFile = File(...),
 ):
     nickname = (nickname or "guest").strip()[:64] or "guest"
+    group_flag = (group_flag or "0").strip()[:1] or "0" 
     device_id = (device_id or "anonymous").strip()[:64] or "anonymous"
     client_name = (client_name or "anonymous").strip()[:64] or "anonymous"
 
@@ -166,6 +170,7 @@ async def upload_file(
 
     row = insert_file_message(
         nickname=nickname,
+        group_flag=group_flag,
         device_id=device_id,
         client_name=client_name,
         kind=kind,

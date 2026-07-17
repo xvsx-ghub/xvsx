@@ -16,6 +16,7 @@ def row_to_message(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "nickname": row["nickname"],
+        "group_flag": row["group_flag"],
         "client_name": row["client_name"],
         "device_id": row["device_id"],
         "kind": row["kind"],
@@ -89,6 +90,7 @@ def list_user_messages(
 
 def insert_text_message(
     nickname: str,
+    group_flag: str,
     device_id: str,
     client_name: str,
     text: str,
@@ -98,12 +100,12 @@ def insert_text_message(
         cur = conn.execute(
             """
             INSERT INTO messages (
-                nickname, device_id, client_name, kind, text_content,
+                nickname, group_flag, device_id, client_name, kind, text_content,
                 stored_name, original_name, mime_type, created_at
             )
-            VALUES (?, ?, ?, 'text', ?, NULL, NULL, NULL, ?)
+            VALUES (?, ?, ?, ?, 'text', ?, NULL, NULL, NULL, ?)
             """,
-            (nickname, device_id, client_name, text, created),
+            (nickname, group_flag, device_id, client_name, text, created),
         )
         conn.commit()
         new_id = cur.lastrowid
@@ -113,6 +115,7 @@ def insert_text_message(
 
 def insert_file_message(
     nickname: str,
+    group_flag: str,    
     device_id: str,
     client_name: str,
     kind: str,
@@ -125,13 +128,14 @@ def insert_file_message(
         cur = conn.execute(
             """
             INSERT INTO messages (
-                nickname, device_id, client_name, kind, text_content,
+                nickname, group_flag, device_id, client_name, kind, text_content,
                 stored_name, original_name, mime_type, created_at
             )
-            VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
             """,
             (
                 nickname,
+                group_flag, 
                 device_id,
                 client_name,
                 kind,
