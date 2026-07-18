@@ -141,9 +141,9 @@ def list_messages(
         }
         
         logger.info(
-            "Response prepared for nickname: %s, group_flag: %s, unread_count: %d, messages count: %d",
+            "Response prepared for client_name: %s, text: %s, unread_count: %d, messages count: %d",
             client_name,
-            [msg["group_flag"] for msg in response["messages"]],
+            [msg["text"] for msg in response["messages"]],
             response["unread_count"],
             len(response["messages"]),
         )

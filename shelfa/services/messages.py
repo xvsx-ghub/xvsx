@@ -101,10 +101,10 @@ def list_group_messages(
     query = """
         SELECT *
         FROM messages
-        WHERE (nickname = ? OR client_name = ?)
+        WHERE client_name = ?
         AND group_flag = '1'
     """
-    params: list = [client_name, client_name]
+    params: list = [client_name]
 
     if after_id is not None:
         query += " AND id > ?"
