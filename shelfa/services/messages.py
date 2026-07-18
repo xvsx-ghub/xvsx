@@ -280,3 +280,18 @@ def total_unread_for_device(device_id: str) -> int:
     if not row:
         return 0
     return int(row["unread_total"] or 0)
+
+def get_group_recipients(client_name: str) -> list[str]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT nickname
+            FROM messages
+            WHERE client_name = ?
+              AND group_flag = '1'
+            GROUP BY device_id
+            """,
+            (client_name,),
+        ).fetchall()
+
+    return [row["nickname"] for row in rows]

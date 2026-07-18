@@ -21,6 +21,7 @@ from shelfa.services.messages import (
     normalize_device_id,
     row_to_message,
     total_unread_for_device,
+    get_group_recipients,
 )
 from shelfa.services.notifications import send_alert_notification
 from shelfa.services.storage import enforce_data_limit, save_upload
@@ -195,7 +196,14 @@ def post_message(body: PostMessageRequest):
         text=text,
     )
     enforce_data_limit()
-    _notify_recipient(nickname, device_id, client_name, text[:100])
+    
+    if group_flag == "1":
+        recipient_list = get_group_recipients(client_name)
+    else:
+        recipient_list = [client_name]
+
+    for recipient in recipient_list:
+        _notify_recipient(nickname, device_id, recipient, text[:100])
     return row_to_message(row)
 
 
