@@ -19,10 +19,11 @@ def check_nickname_exists(nickname: str) -> bool:
     return row is not None
 
 
-def declare_user(nickname: str, device_id: str) -> None:
+def declare_user(nickname: str, group_flag: str, device_id: str) -> None:
     message = f"My nickname is {nickname}"
     insert_text_message(
         nickname=nickname,
+        group_flag=group_flag,
         device_id=device_id,
         client_name="Chat",
         text=message,
@@ -36,9 +37,9 @@ def validate_identity(nickname: str, device_id: str) -> bool:
     return True
 
 
-def register_identity(nickname: str, device_id: str) -> bool:
+def register_identity(nickname: str, group_flag: str, device_id: str) -> bool:
     device_id = normalize_device_id(device_id)
     if not validate_identity(nickname, device_id):
         return False
-    declare_user(nickname=nickname, device_id=device_id)
+    declare_user(nickname=nickname, group_flag=group_flag, device_id=device_id)
     return True

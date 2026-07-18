@@ -8,8 +8,9 @@ router = APIRouter(prefix="/api/identity", tags=["identity"])
 def identity_validate(
     device_id: str = Query(...),
     nickname: str = Query(...),
+    group_flag: str = Query("0")
 ):
-    if register_identity(nickname=nickname, device_id=device_id):
+    if register_identity(nickname=nickname, group_flag=group_flag, device_id=device_id):
         return {"valid": True}
     return {"valid": False}
 

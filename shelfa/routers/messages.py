@@ -14,6 +14,7 @@ from shelfa.services.messages import (
     increment_unread_for_device,
     insert_file_message,
     insert_text_message,
+    list_group_messages,
     list_thread_messages,
     list_user_messages,
     message_exists,
@@ -95,25 +96,75 @@ def list_messages(
             device_id=normalized_device_id,
             peer_nickname=client_name,
         )
-        return {
+        
+        response = {
             "messages": [row_to_message(row) for row in rows],
             "unread_count": total_unread_for_device(normalized_device_id),
-        }
+        } 
+        
+        logger.info(
+            "Response prepared for nickname: %s, group_flag: %s, unread_count: %d, messages count: %d",
+            nickname,
+            [msg["group_flag"] for msg in response["messages"]],
+            response["unread_count"],
+            len(response["messages"]),
+        )             
+        
+        return response 
 
     if nickname is not None and client_name is None:
         rows = list_user_messages(nickname, after_id, limit)
         clear_unread_for_thread(device_id=normalized_device_id, peer_nickname=None)
-        return {
+        
+        response = {
             "messages": [row_to_message(row) for row in rows],
             "unread_count": total_unread_for_device(normalized_device_id),
         }
         
-    logger.info("nickname and client_name are both None, returning empty messages list")
-
-    return {
+        logger.info(
+            "Response prepared for nickname: %s, group_flag: %s, unread_count: %d, messages count: %d",
+            nickname,
+            [msg["group_flag"] for msg in response["messages"]],
+            response["unread_count"],
+            len(response["messages"]),
+        )
+        
+        return response     
+    
+    if nickname is None and client_name is not None:
+        rows = list_group_messages(client_name, after_id, limit)
+        clear_unread_for_thread(device_id=normalized_device_id, peer_nickname=None)
+        
+        response = {
+            "messages": [row_to_message(row) for row in rows],
+            "unread_count": total_unread_for_device(normalized_device_id),
+        }
+        
+        logger.info(
+            "Response prepared for nickname: %s, group_flag: %s, unread_count: %d, messages count: %d",
+            client_name,
+            [msg["group_flag"] for msg in response["messages"]],
+            response["unread_count"],
+            len(response["messages"]),
+        )
+        
+        return response
+        
+        
+    response = {
         "messages": [],
         "unread_count": total_unread_for_device(normalized_device_id),
-    }
+    }   
+    
+    logger.info(
+        "Response prepared for nickname: %s, group_flag: %s, unread_count: %d, messages count: %d",
+        nickname,
+        [msg["group_flag"] for msg in response["messages"]],
+        response["unread_count"],
+        len(response["messages"]),
+    )
+    
+    return response
 
 
 @router.post("/messages", response_model=MessageResponse, status_code=201)
@@ -123,6 +174,15 @@ def post_message(body: PostMessageRequest):
     device_id = (body.device_id or "anonymous").strip()[:64] or "anonymous"
     client_name = (body.client_name or "anonymous").strip()[:64] or "anonymous"
     text = (body.text or "").strip()
+    
+    logger.info(
+        "Posting message. nickname: %s, group_flag: %s, device_id: %s, client_name: %s, text length: %d",
+        nickname,
+        group_flag,
+        device_id,
+        client_name,
+        len(text),
+    )
 
     if not text:
         raise HTTPException(status_code=400, detail="text required")

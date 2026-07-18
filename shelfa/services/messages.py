@@ -12,11 +12,17 @@ def normalize_device_id(raw: Optional[str]) -> str:
     return raw.strip()[:64] or "anonymous"
 
 
+def normalize_group_flag(raw: Optional[str]) -> str:
+    if raw is None:
+        return "0"
+    return raw.strip()[:1] or "0"
+
+
 def row_to_message(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "nickname": row["nickname"],
-        "group_flag": row["group_flag"],
+        "group_flag": normalize_group_flag(row["group_flag"]),
         "client_name": row["client_name"],
         "device_id": row["device_id"],
         "kind": row["kind"],
@@ -86,6 +92,29 @@ def list_user_messages(
 
     with get_db() as conn:
         return conn.execute(query, params).fetchall()
+    
+def list_group_messages(
+    client_name: str,
+    after_id: Optional[int],
+    limit: int,
+) -> list[sqlite3.Row]:
+    query = """
+        SELECT *
+        FROM messages
+        WHERE (nickname = ? OR client_name = ?)
+        AND group_flag = '1'
+    """
+    params: list = [client_name, client_name]
+
+    if after_id is not None:
+        query += " AND id > ?"
+        params.append(after_id)
+
+    query += " ORDER BY id ASC LIMIT ?"
+    params.append(limit)
+
+    with get_db() as conn:
+        return conn.execute(query, params).fetchall()
 
 
 def insert_text_message(
@@ -95,6 +124,7 @@ def insert_text_message(
     client_name: str,
     text: str,
 ) -> sqlite3.Row:
+    group_flag = normalize_group_flag(group_flag)
     created = utc_now_iso()
     with get_db() as conn:
         cur = conn.execute(
@@ -123,6 +153,7 @@ def insert_file_message(
     original_name: str,
     mime_type: str,
 ) -> sqlite3.Row:
+    group_flag = normalize_group_flag(group_flag)
     created = utc_now_iso()
     with get_db() as conn:
         cur = conn.execute(
