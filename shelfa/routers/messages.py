@@ -188,13 +188,22 @@ def post_message(body: PostMessageRequest):
     if not text:
         raise HTTPException(status_code=400, detail="text required")
 
-    row = insert_text_message(
-        nickname=nickname,
-        group_flag=group_flag,
-        device_id=device_id,
-        client_name=client_name,
-        text=text,
-    )
+    try:
+        row = insert_text_message(
+            nickname=nickname,
+            group_flag=group_flag,
+            device_id=device_id,
+            client_name=client_name,
+            text=text,
+        )
+    except ValueError:
+        logger.info(
+            "Blocked message containing prohibited content. nickname=%s, device_id=%s, client_name=%s",
+            nickname,
+            device_id,
+            client_name,
+        )
+        raise HTTPException(status_code=400, detail="prohibited content")
     enforce_data_limit()
     
     if group_flag == "1":

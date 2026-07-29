@@ -4,6 +4,41 @@ import sqlite3
 
 from shelfa.database import get_db
 from shelfa.services.storage import utc_now_iso
+from shelfa.config import PROHIBITED_WORDS, ENABLE_CONTENT_FILTER
+import re
+
+
+def contains_prohibited(text: str) -> bool:
+    # If filtering is disabled, always allow
+    if not ENABLE_CONTENT_FILTER:
+        return False
+    if not text:
+        return False
+    lowered = text.lower()
+    # Also check a punctuation-normalized version to handle trailing punctuation
+    normalized = re.sub(r"[^a-z0-9\s]", " ", lowered)
+    # Use word boundaries to avoid partial matches (e.g., 'scam' in 'scamp')
+    for word in PROHIBITED_WORDS:
+        w = word.lower()
+        pattern = r"\b" + re.escape(w) + r"\b"
+        if re.search(pattern, lowered) or re.search(pattern, normalized):
+            return True
+    # Also check joined/obfuscated forms by removing spaces and looking for substrings
+    nospace = re.sub(r"\s+", "", lowered)
+    for word in PROHIBITED_WORDS:
+        wns = re.sub(r"\s+", "", word.lower())
+        if wns and wns in nospace:
+            return True
+    # Check for obfuscated forms where non-word chars are inserted between letters (e.g. f*ck)
+    for word in PROHIBITED_WORDS:
+        letters = re.sub(r"[^a-z0-9]", "", word.lower())
+        if len(letters) < 3:
+            continue
+        # allow any non-word chars between letters
+        obf = r"".join([re.escape(ch) + r"\W*" for ch in letters])
+        if re.search(obf, lowered):
+            return True
+    return False
 
 
 def normalize_device_id(raw: Optional[str]) -> str:
@@ -124,6 +159,9 @@ def insert_text_message(
     client_name: str,
     text: str,
 ) -> sqlite3.Row:
+    # Prevent storing messages that contain prohibited content.
+    if contains_prohibited(text):
+        raise ValueError("message contains prohibited content")
     group_flag = normalize_group_flag(group_flag)
     created = utc_now_iso()
     with get_db() as conn:
