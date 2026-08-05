@@ -1,0 +1,204 @@
+import logging
+from typing import Optional
+
+from fastapi import APIRouter, Form, HTTPException, Query
+from pydantic import BaseModel
+
+import shelfa_group.db as db
+import shelfa_group.fcm as fcm
+
+api_router = APIRouter(prefix="/shelfa", tags=["api_router"])
+
+logger = logging.getLogger("shelfa")
+
+
+class MessageResponse(BaseModel):
+    id: int
+    message_type: int
+    message_content: str
+    sender_nickname: str
+    recipient_nickname: str
+    timestamp_unix: int
+
+
+class MessageListResponse(BaseModel):
+    messages: list[MessageResponse]
+    unread_count: int
+
+
+class UserResponse(BaseModel):
+    id: int
+    user_nickname: str
+    user_type: int
+    device_id: str
+    fcm_token: str
+    
+    
+class StatusResponse(BaseModel):
+    status: bool = True
+
+
+##########################################################################################
+# message
+
+@api_router.get("/message_list", response_model=MessageListResponse)
+def get_message_list(
+    sender_nickname: str = Query(...),
+    recipient_nickname: str = Query(...),
+    after_id: int | None = Query(None),
+):
+    logger.info(
+        "Listing messages. sender=%s recipient=%s after_id=%s",
+        sender_nickname,
+        recipient_nickname,
+        after_id,
+    )
+
+    recipient_type = db.get_user_type(recipient_nickname)
+
+    match recipient_type:
+        case db.GROUP_USER_TYPE:
+            sender_filter = None
+        case db.PRIVATE_USER_TYPE:
+            sender_filter = sender_nickname
+        case _:
+            raise HTTPException(status_code=404, detail="Recipient not found")
+
+    rows = db.get_message_list(
+        sender_filter,
+        recipient_nickname,
+        after_id,
+    )
+
+    unread_count = db.get_unread_messages_count(
+        sender_nickname,
+        recipient_nickname,
+    )
+    
+    db.clear_unread_messages_count(
+        sender_nickname,
+        recipient_nickname,
+    )
+
+    return MessageListResponse(
+        messages=[db.row_to_message(row) for row in rows],
+        unread_count=unread_count,
+    )
+
+@api_router.post("/message", response_model=MessageResponse)
+def post_message(
+    sender_nickname: str = Form(...),
+    recipient_nickname: str = Form(...),
+    message_content: str = Form(...),
+    message_type: int = Form(0),
+    timestamp_unix: int = Form(...),
+):
+    logger.info(
+        "Posting message. sender=%s recipient=%s type=%d",
+        sender_nickname,
+        recipient_nickname,
+        message_type,
+    )
+
+    recipient_type = db.get_user_type(recipient_nickname)
+    if recipient_type is None:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+
+    row = db.set_message(
+        sender_nickname,
+        recipient_nickname,
+        message_content,
+        message_type,
+        timestamp_unix,
+    )
+
+    if recipient_type == db.GROUP_USER_TYPE:
+        for nickname in db.get_sender_nickname_list(recipient_nickname):
+            if nickname == sender_nickname:
+                continue
+
+            db.increment_unread_messages_count(
+                nickname,
+                recipient_nickname,
+            )
+            
+            fcm.send_alert_notification(
+                token=db.get_fcm_token_by_nickname(nickname),
+                title=f"{sender_nickname} in group {recipient_nickname}",
+                body=message_content,
+                badge=db.get_unread_messages_count(
+                    nickname,
+                    recipient_nickname,
+                ),
+            )
+
+    elif recipient_type == db.PRIVATE_USER_TYPE:
+        db.increment_unread_messages_count(
+            sender_nickname,
+            recipient_nickname,
+        )
+        
+        fcm.send_alert_notification(
+            token=db.get_fcm_token_by_nickname(recipient_nickname),
+            title=sender_nickname,
+            body=message_content,
+            badge=db.get_unread_messages_count(
+                sender_nickname,
+                recipient_nickname,
+            ),
+        )   
+    else:
+        raise HTTPException(status_code=404, detail="Unknown recipient type")
+
+    return MessageResponse(
+        id=row["id"],
+        message_type=row["message_type"],
+        message_content=row["message_content"],
+        sender_nickname=row["sender_nickname"],
+        recipient_nickname=row["recipient_nickname"],
+        timestamp_unix=row["timestamp_unix"],
+    )
+
+
+##########################################################################################
+# user
+
+
+@api_router.get("/user_existence", response_model=StatusResponse)
+def get_user_existence(
+    user_nickname: str = Query(...),
+):
+    logger.info("Checking user existence. nickname=%s", user_nickname)
+
+    row = db.get_user_by_nickname(user_nickname)
+
+    if row is None:
+        return StatusResponse(status=False)
+    return StatusResponse(status=True)
+
+
+@api_router.post("/user", response_model=UserResponse)
+def post_user(
+    user_nickname: str = Form(...),
+    user_type: int = Form(0),
+    device_id: str = Form(...),
+    fcm_token: str = Form(...),
+):
+    logger.info(
+        "Creating/updating user. nickname=%s type=%d device_id=%s",
+        user_nickname,
+        user_type,
+        device_id,
+    )
+
+    row = db.set_user(
+        user_nickname,
+        user_type,
+        device_id,
+        fcm_token,
+    )
+    
+    if row is None:
+        raise HTTPException(status_code=400, detail="User already exists")
+    return UserResponse( db.row_to_user(row) )
+
