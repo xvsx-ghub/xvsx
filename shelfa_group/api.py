@@ -192,7 +192,25 @@ def post_user(body: PostUserRequest):
         body.user_type,
         body.device_id,
     )
-
+    
+    row = db.get_user_by_nickname(body.user_nickname)
+    
+    if row:
+        if row["device_id"] == body.device_id:
+            logger.info("User valid.")
+            return UserResponse(
+                id=row["id"],
+                user_nickname=row["user_nickname"],
+                user_type=row["user_type"],
+                device_id=row["device_id"],
+                fcm_token=row["fcm_token"],
+            )
+        logger.info("User invalid.")
+        raise HTTPException(
+            status_code=409,
+            detail="User is already registered on another device.",
+        )
+    logger.info("User creating.")
     row = db.set_user(
         body.user_nickname,
         body.user_type,
@@ -200,11 +218,6 @@ def post_user(body: PostUserRequest):
         body.fcm_token,
     )
     
-    if row is None:
-        raise HTTPException(
-            status_code=409,
-            detail="User already exists",
-        )
     return UserResponse(
         id=row["id"],
         user_nickname=row["user_nickname"],

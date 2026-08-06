@@ -160,18 +160,6 @@ def set_user(
     fcm_token: str,
 ) -> Optional[dict]:
     with get_db() as conn:
-        exists = conn.execute(
-            """
-            SELECT 1
-            FROM user
-            WHERE user_nickname = ?
-            """,
-            (user_nickname,),
-        ).fetchone()
-
-        if exists:
-            return None
-
         cursor = conn.execute(
             """
             INSERT INTO user (user_nickname, user_type, device_id, fcm_token)
