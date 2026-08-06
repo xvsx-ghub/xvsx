@@ -224,16 +224,6 @@ def get_fcm_token_by_nickname(nickname: str) -> Optional[str]:
         if row:
             return row["fcm_token"]
         return None
-    
-    
-def row_to_user(row: sqlite3.Row) -> dict:
-    return {
-        "id": row["id"],
-        "user_nickname": row["user_nickname"],
-        "user_type": row["user_type"],
-        "device_id": row["device_id"],
-        "fcm_token": row["fcm_token"],
-    }  
         
 
 ##########################################################################################       

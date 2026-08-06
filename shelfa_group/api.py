@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Form, HTTPException, Query
@@ -34,6 +35,13 @@ class UserResponse(BaseModel):
     fcm_token: str
     
     
+class PostUserRequest(BaseModel):
+    user_nickname: str = "",
+    user_type: str = "",
+    device_id: str = "",
+    fcm_token: str = ""
+    
+    
 class StatusResponse(BaseModel):
     status: bool = True
 
@@ -45,7 +53,7 @@ class StatusResponse(BaseModel):
 def get_message_list(
     sender_nickname: str = Query(...),
     recipient_nickname: str = Query(...),
-    after_id: int | None = Query(None),
+    after_id: str | None = Query(None),
 ):
     logger.info(
         "Listing messages. sender=%s recipient=%s after_id=%s",
@@ -67,7 +75,7 @@ def get_message_list(
     rows = db.get_message_list(
         sender_filter,
         recipient_nickname,
-        after_id,
+        to_int(after_id),
     )
 
     unread_count = db.get_unread_messages_count(
@@ -90,8 +98,7 @@ def post_message(
     sender_nickname: str = Form(...),
     recipient_nickname: str = Form(...),
     message_content: str = Form(...),
-    message_type: int = Form(0),
-    timestamp_unix: int = Form(...),
+    message_type: str = Form(...),
 ):
     logger.info(
         "Posting message. sender=%s recipient=%s type=%d",
@@ -108,8 +115,8 @@ def post_message(
         sender_nickname,
         recipient_nickname,
         message_content,
-        message_type,
-        timestamp_unix,
+        to_int(message_type),
+        int(time.time()),
     )
 
     if recipient_type == db.GROUP_USER_TYPE:
@@ -178,27 +185,40 @@ def get_user_existence(
 
 
 @api_router.post("/user", response_model=UserResponse)
-def post_user(
-    user_nickname: str = Form(...),
-    user_type: int = Form(0),
-    device_id: str = Form(...),
-    fcm_token: str = Form(...),
-):
+def post_user(body: PostUserRequest):
     logger.info(
-        "Creating/updating user. nickname=%s type=%d device_id=%s",
-        user_nickname,
-        user_type,
-        device_id,
+        "Creating/updating user. nickname=%s type=%s device_id=%s",
+        body.user_nickname,
+        body.user_type,
+        body.device_id,
     )
 
     row = db.set_user(
-        user_nickname,
-        user_type,
-        device_id,
-        fcm_token,
+        body.user_nickname,
+        body.user_type,
+        body.device_id,
+        body.fcm_token,
     )
     
     if row is None:
-        raise HTTPException(status_code=400, detail="User already exists")
-    return UserResponse( db.row_to_user(row) )
+        raise HTTPException(
+            status_code=409,
+            detail="User already exists",
+        )
+    return UserResponse(
+        id=row["id"],
+        user_nickname=row["user_nickname"],
+        user_type=row["user_type"],
+        device_id=row["device_id"],
+        fcm_token=row["fcm_token"],
+    )
+
+
+def to_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
