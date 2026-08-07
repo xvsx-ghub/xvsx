@@ -42,6 +42,13 @@ class PostUserRequest(BaseModel):
     fcm_token: str = ""
     
     
+class PostMessageRequest(BaseModel):
+    sender_nickname: str = "",
+    recipient_nickname: str = "",
+    message_content: str = "",
+    message_type: str = ""
+    
+    
 class StatusResponse(BaseModel):
     status: bool = True
 
@@ -94,64 +101,59 @@ def get_message_list(
     )
 
 @api_router.post("/message", response_model=MessageResponse)
-def post_message(
-    sender_nickname: str = Form(...),
-    recipient_nickname: str = Form(...),
-    message_content: str = Form(...),
-    message_type: str = Form(...),
-):
+def post_message(body: PostMessageRequest):
     logger.info(
-        "Posting message. sender=%s recipient=%s type=%d",
-        sender_nickname,
-        recipient_nickname,
-        message_type,
+        "Posting message. sender=%s recipient=%s type=%s",
+        body.sender_nickname,
+        body.recipient_nickname,
+        body.message_type,
     )
 
-    recipient_type = db.get_user_type(recipient_nickname)
+    recipient_type = db.get_user_type(body.recipient_nickname)
     if recipient_type is None:
         raise HTTPException(status_code=404, detail="Recipient not found")
 
     row = db.set_message(
-        sender_nickname,
-        recipient_nickname,
-        message_content,
-        to_int(message_type),
+        body.sender_nickname,
+        body.recipient_nickname,
+        body.message_content,
+        body.message_type,
         int(time.time()),
     )
 
     if recipient_type == db.GROUP_USER_TYPE:
-        for nickname in db.get_sender_nickname_list(recipient_nickname):
-            if nickname == sender_nickname:
+        for nickname in db.get_sender_nickname_list(body.recipient_nickname):
+            if nickname == body.sender_nickname:
                 continue
 
             db.increment_unread_messages_count(
                 nickname,
-                recipient_nickname,
+                body.recipient_nickname,
             )
             
             fcm.send_alert_notification(
                 token=db.get_fcm_token_by_nickname(nickname),
-                title=f"{sender_nickname} in group {recipient_nickname}",
-                body=message_content,
+                title=f"{body.sender_nickname} in group {body.recipient_nickname}",
+                body=body.message_content,
                 badge=db.get_unread_messages_count(
                     nickname,
-                    recipient_nickname,
+                    body.recipient_nickname,
                 ),
             )
 
     elif recipient_type == db.PRIVATE_USER_TYPE:
         db.increment_unread_messages_count(
-            sender_nickname,
-            recipient_nickname,
+            body.sender_nickname,
+            body.recipient_nickname,
         )
         
         fcm.send_alert_notification(
-            token=db.get_fcm_token_by_nickname(recipient_nickname),
-            title=sender_nickname,
-            body=message_content,
+            token=db.get_fcm_token_by_nickname(body.recipient_nickname),
+            title=body.sender_nickname,
+            body=body.message_content,
             badge=db.get_unread_messages_count(
-                sender_nickname,
-                recipient_nickname,
+                body.sender_nickname,
+                body.recipient_nickname,
             ),
         )   
     else:

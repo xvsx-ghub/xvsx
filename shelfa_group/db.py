@@ -5,8 +5,9 @@ from typing import Optional
 
 from shelfa_group.config import DB_PATH
 
-PRIVATE_USER_TYPE = 0
-GROUP_USER_TYPE = 1
+UNKNOWN_USER_TYPE = 0
+PRIVATE_USER_TYPE = 1
+GROUP_USER_TYPE = 2
 
 
 
