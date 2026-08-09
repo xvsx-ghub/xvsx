@@ -10,7 +10,7 @@ import logging
 logger = logging.getLogger("shelfa")
 
 
-def init_shelfa(app: FastAPI) -> None:
+def init_shelfa(app: FastAPI) -> None:   
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     config.PRIVATE_DIR.mkdir(parents=True, exist_ok=True)

@@ -2,11 +2,13 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Form, HTTPException, Query
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
+from shelfa_group.config import MAX_UPLOAD_BYTES
 import shelfa_group.db as db
 import shelfa_group.fcm as fcm
+from shelfa_group.storage import upload
 
 api_router = APIRouter(prefix="/shelfa", tags=["api_router"])
 
@@ -36,17 +38,21 @@ class UserResponse(BaseModel):
     
     
 class PostUserRequest(BaseModel):
-    user_nickname: str = "",
-    user_type: str = "",
-    device_id: str = "",
+    user_nickname: str = ""
+    user_type: int = 0
+    device_id: str = ""
     fcm_token: str = ""
     
     
 class PostMessageRequest(BaseModel):
-    sender_nickname: str = "",
-    recipient_nickname: str = "",
-    message_content: str = "",
-    message_type: str = ""
+    sender_nickname: str = ""
+    recipient_nickname: str = ""
+    message_content: str = ""
+    message_type: int = 0
+    
+    
+class FileResponse(BaseModel):
+    file_path: str = ""
     
     
 class StatusResponse(BaseModel):
@@ -226,6 +232,23 @@ def post_user(body: PostUserRequest):
         user_type=row["user_type"],
         device_id=row["device_id"],
         fcm_token=row["fcm_token"],
+    )
+
+    
+##########################################################################################
+# storage
+
+
+@api_router.post("/file", response_model=FileResponse)
+async def post_file(file: UploadFile = File(...)):
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    file_path = upload(content, file.filename)
+
+    return FileResponse(
+        file_path=file_path
     )
 
 
