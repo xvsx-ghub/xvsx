@@ -1,11 +1,13 @@
 import logging
+from pathlib import Path
 import time
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from shelfa_group.config import MAX_UPLOAD_BYTES
+from shelfa_group.config import MAX_UPLOAD_BYTES, UPLOAD_DIR
 import shelfa_group.db as db
 import shelfa_group.fcm as fcm
 from shelfa_group.storage import upload
@@ -51,7 +53,7 @@ class PostMessageRequest(BaseModel):
     message_type: int = 0
     
     
-class FileResponse(BaseModel):
+class FilePathResponse(BaseModel):
     file_path: str = ""
     
     
@@ -239,17 +241,32 @@ def post_user(body: PostUserRequest):
 # storage
 
 
-@api_router.post("/file", response_model=FileResponse)
+@api_router.post("/file", response_model=FilePathResponse)
 async def post_file(file: UploadFile = File(...)):
     content = await file.read()
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
 
     file_path = upload(content, file.filename)
+    
+    get_file_request_name = "shelfa/file"
 
-    return FileResponse(
-        file_path=file_path
+    return FilePathResponse(
+        file_path=f"{get_file_request_name}/{file_path}"
     )
+    
+
+@api_router.get("/file/{name}")
+def get_file(name: str):    
+    safe = Path(name).name
+    if safe != name or ".." in name:
+        raise HTTPException(status_code=400, detail="bad path")
+
+    full = UPLOAD_DIR / safe    
+    if not full.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+
+    return FileResponse(full)
 
 
 def to_int(value: str | None) -> int | None:
