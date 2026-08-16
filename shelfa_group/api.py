@@ -59,7 +59,27 @@ class FilePathResponse(BaseModel):
     
 class StatusResponse(BaseModel):
     status: bool = True
+    
 
+class ContactResponse(BaseModel):
+    id: int
+    sender_nickname: str
+    recipient_nickname: str
+    unread_messages_count: int
+    
+
+class ContactListResponse(BaseModel):
+    contact_list: list[ContactResponse]
+    
+  
+class GetContactRequest(BaseModel):
+    user_nickname: str
+    
+
+class PostContactRequest(BaseModel):
+    sender_nickname: str
+    recipient_nickname: str
+    
 
 ##########################################################################################
 # message
@@ -234,6 +254,61 @@ def post_user(body: PostUserRequest):
         user_type=row["user_type"],
         device_id=row["device_id"],
         fcm_token=row["fcm_token"],
+    )
+
+
+
+##########################################################################################
+# contact
+
+
+@api_router.post("/contact", response_model=ContactResponse)
+def create_contact(body: PostContactRequest):
+    logger.info(
+        "Creating contact. sender=%s recipient=%s",
+        body.sender_nickname,
+        body.recipient_nickname,
+    )
+
+    if body.sender_nickname == body.recipient_nickname:
+        raise HTTPException(
+            status_code=400,
+            detail="Sender and recipient must be different",
+        )
+
+    if db.get_user_by_nickname(body.recipient_nickname) is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"User '{body.recipient_nickname}' doesn't exist",
+        )
+
+    try:
+        row = db.create_contact(
+            body.sender_nickname,
+            body.recipient_nickname,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e),
+        )
+
+    return ContactResponse(**row)
+
+
+@api_router.get("/contact_list", response_model=ContactListResponse)
+def get_contact_list(
+    user_nickname: str = Query(...),
+):
+    logger.info("Contact list for %s", user_nickname)
+
+    rows = db.get_contact_list(user_nickname)
+
+    return ContactListResponse(
+        contact_list=[
+            ContactResponse(**dict(row))
+            for row in rows
+        ],
     )
 
     

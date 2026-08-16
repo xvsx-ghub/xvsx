@@ -259,4 +259,75 @@ def clear_unread_messages_count(sender_nickname: str, recipient_nickname: str) -
             (sender_nickname, recipient_nickname),
         )
         conn.commit()
-       
+  
+  
+def get_contact_list(user_nickname: str) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM contact_registry
+            WHERE sender_nickname = ?
+               OR recipient_nickname = ?
+            ORDER BY id
+            """,
+            (user_nickname, user_nickname),
+        ).fetchall()
+
+    return [dict(row) for row in rows]  
+  
+  
+def get_contact_nickname_list(user_nickname: str) -> list[str]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT recipient_nickname AS nickname
+            FROM contact_registry
+            WHERE sender_nickname = ?
+
+            UNION
+
+            SELECT sender_nickname AS nickname
+            FROM contact_registry
+            WHERE recipient_nickname = ?
+
+            ORDER BY nickname
+            """,
+            (user_nickname, user_nickname),
+        ).fetchall()
+
+    return [row["nickname"] for row in rows]
+
+
+def create_contact(
+    sender_nickname: str,
+    recipient_nickname: str,
+) -> dict:
+    with get_db() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO contact_registry (
+                    sender_nickname,
+                    recipient_nickname
+                )
+                VALUES (?, ?)
+                """,
+                (sender_nickname, recipient_nickname),
+            )
+            conn.commit()
+
+        except sqlite3.IntegrityError:
+            raise ValueError("Contact already exists")
+
+        row = conn.execute(
+            """
+            SELECT *
+            FROM contact_registry
+            WHERE id = ?
+            """,
+            (cursor.lastrowid,),
+        ).fetchone()
+
+    return dict(row)
+
