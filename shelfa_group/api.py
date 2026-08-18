@@ -116,8 +116,8 @@ def get_message_list(
     )
 
     unread_count = db.get_unread_messages_count(
-        sender_nickname,
         recipient_nickname,
+        sender_nickname,
     )
     
     if reset_unread_count_status == "1":
