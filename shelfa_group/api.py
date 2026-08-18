@@ -88,12 +88,14 @@ class PostContactRequest(BaseModel):
 def get_message_list(
     sender_nickname: str = Query(...),
     recipient_nickname: str = Query(...),
+    reset_unread_count_status: str = Query(...),
     after_id: str | None = Query(None),
 ):
     logger.info(
-        "Listing messages. sender=%s recipient=%s after_id=%s",
+        "Listing messages. sender=%s recipient=%s reset_unread_count_status=%s after_id=%s",
         sender_nickname,
         recipient_nickname,
+        reset_unread_count_status,
         after_id,
     )
 
@@ -118,10 +120,11 @@ def get_message_list(
         recipient_nickname,
     )
     
-    db.clear_unread_messages_count(
-        sender_nickname,
-        recipient_nickname,
-    )
+    if reset_unread_count_status == "1":
+        db.clear_unread_messages_count(
+            recipient_nickname,
+            sender_nickname,
+        )
 
     return MessageListResponse(
         messages=[db.row_to_message(row) for row in rows],

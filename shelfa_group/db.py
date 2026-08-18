@@ -252,9 +252,15 @@ def clear_unread_messages_count(sender_nickname: str, recipient_nickname: str) -
     with get_db() as conn:
         conn.execute(
             """
-            UPDATE contact_registry
-            SET unread_messages_count = 0
-            WHERE sender_nickname = ? AND recipient_nickname = ?
+            INSERT INTO contact_registry (
+                sender_nickname,
+                recipient_nickname,
+                unread_messages_count
+            )
+            VALUES (?, ?, 0)
+            ON CONFLICT(sender_nickname, recipient_nickname)
+            DO UPDATE SET
+                unread_messages_count = 0
             """,
             (sender_nickname, recipient_nickname),
         )
