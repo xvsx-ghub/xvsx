@@ -64,7 +64,9 @@ class StatusResponse(BaseModel):
 class ContactResponse(BaseModel):
     id: int
     sender_nickname: str
+    sender_user_type: int = 0
     recipient_nickname: str
+    recipient_user_type: int = 0
     unread_messages_count: int
     
 
@@ -287,8 +289,8 @@ def create_contact(body: PostContactRequest):
 
     try:
         row = db.create_contact(
-            body.sender_nickname,
             body.recipient_nickname,
+            body.sender_nickname,
         )
     except ValueError as e:
         raise HTTPException(
@@ -304,14 +306,20 @@ def get_contact_list(
     user_nickname: str = Query(...),
 ):
     logger.info("Contact list for %s", user_nickname)
-
     rows = db.get_contact_list(user_nickname)
 
+    contact_list = []
+    for row in rows:
+        data = dict(row)
+        # enrich with user types (default to 0 if unknown)
+        sender_type = db.get_user_type(data.get("sender_nickname"))
+        recipient_type = db.get_user_type(data.get("recipient_nickname"))
+        data["sender_user_type"] = sender_type if sender_type is not None else 0
+        data["recipient_user_type"] = recipient_type if recipient_type is not None else 0
+        contact_list.append(ContactResponse(**data))
+
     return ContactListResponse(
-        contact_list=[
-            ContactResponse(**dict(row))
-            for row in rows
-        ],
+        contact_list=contact_list,
     )
 
     
