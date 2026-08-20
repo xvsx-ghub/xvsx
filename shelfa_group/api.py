@@ -22,7 +22,9 @@ class MessageResponse(BaseModel):
     message_type: int
     message_content: str
     sender_nickname: str
+    sender_user_type: int = 0
     recipient_nickname: str
+    recipient_user_type: int = 0
     timestamp_unix: int
 
 
@@ -127,9 +129,17 @@ def get_message_list(
             recipient_nickname,
             sender_nickname,
         )
+    messages = []
+    for row in rows:
+        msg = db.row_to_message(row)
+        sender_type = db.get_user_type(msg.get("sender_nickname"))
+        recipient_type = db.get_user_type(msg.get("recipient_nickname"))
+        msg["sender_user_type"] = sender_type if sender_type is not None else 0
+        msg["recipient_user_type"] = recipient_type if recipient_type is not None else 0
+        messages.append(msg)
 
     return MessageListResponse(
-        messages=[db.row_to_message(row) for row in rows],
+        messages=messages,
         unread_count=unread_count,
     )
 
