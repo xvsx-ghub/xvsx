@@ -120,14 +120,14 @@ def get_message_list(
     )
 
     unread_count = db.get_unread_messages_count(
-        recipient_nickname,
         sender_nickname,
+        recipient_nickname,
     )
     
     if reset_unread_count_status == "1":
         db.clear_unread_messages_count(
-            recipient_nickname,
             sender_nickname,
+            recipient_nickname,
         )
     messages = []
     for row in rows:
