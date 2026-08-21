@@ -299,8 +299,8 @@ def create_contact(body: PostContactRequest):
 
     try:
         row = db.create_contact(
-            body.recipient_nickname,
             body.sender_nickname,
+            body.recipient_nickname,
         )
     except ValueError as e:
         raise HTTPException(
