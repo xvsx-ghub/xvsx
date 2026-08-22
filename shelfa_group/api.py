@@ -352,6 +352,16 @@ def create_contact(body: PostContactRequest):
             status_code=409,
             detail=str(e),
         )
+        
+    fcm.send_alert_notification(
+        token=db.get_fcm_token_by_nickname(body.recipient_nickname),
+        title=f"{body.sender_nickname} in group {body.recipient_nickname}",
+        body="New contact",
+        badge=db.get_unread_messages_count(
+            body.sender_nickname,
+            body.recipient_nickname,
+        ),
+    )
 
     data = dict(row)
     sender_type = db.get_user_type(data.get("sender_nickname"))
