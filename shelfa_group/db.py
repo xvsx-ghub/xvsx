@@ -106,11 +106,18 @@ def get_message_list(
         query = "SELECT * FROM message WHERE 1=1"
         params = []
         
-        if sender_nickname is None and recipient_nickname is not None:
+        if sender_nickname is None and recipient_nickname is None:
+            pass         
+                    
+        elif sender_nickname is None and recipient_nickname is not None:
             query += " AND (sender_nickname = ? OR recipient_nickname = ?)"
             params.extend([recipient_nickname, recipient_nickname])
         
-        if sender_nickname is not None and recipient_nickname is not None:
+        elif sender_nickname is not None and recipient_nickname is None:
+            query += " AND (sender_nickname = ? OR recipient_nickname = ?)"
+            params.extend([sender_nickname, sender_nickname])
+        
+        elif sender_nickname is not None and recipient_nickname is not None:
             query += " AND ((sender_nickname = ? AND recipient_nickname = ?) OR (sender_nickname = ? AND recipient_nickname = ?))"
             params.extend([sender_nickname, recipient_nickname, recipient_nickname, sender_nickname])
             

@@ -90,9 +90,9 @@ class PostContactRequest(BaseModel):
 
 @api_router.get("/message_list", response_model=MessageListResponse)
 def get_message_list(
-    sender_nickname: str = Query(...),
-    recipient_nickname: str = Query(...),
-    reset_unread_count_status: str = Query(...),
+    sender_nickname: str = Query(None),
+    recipient_nickname: str = Query(None),
+    reset_unread_count_status: str = Query(None),
     after_id: str | None = Query(None),
 ):
     logger.info(
@@ -103,45 +103,79 @@ def get_message_list(
         after_id,
     )
 
-    recipient_type = db.get_user_type(recipient_nickname)
+    recipient_type = db.get_user_type(sender_nickname)
 
     match recipient_type:
+        case db.PRIVATE_USER_TYPE:            
+            m_sender_nickname = sender_nickname
+            m_recipient_nickname = recipient_nickname
+            
+            rows = db.get_message_list(
+                m_sender_nickname,
+                m_recipient_nickname,
+                to_int(after_id),
+            )
+        
+            unread_count = db.get_unread_messages_count(
+                sender_nickname,
+                recipient_nickname,
+            )
+            
+            if reset_unread_count_status == "1":
+                db.clear_unread_messages_count(
+                    sender_nickname,
+                    recipient_nickname,
+                )
+            messages = []
+            for row in rows:
+                msg = db.row_to_message(row)
+                sender_type = db.get_user_type(msg.get("sender_nickname"))
+                recipient_type = db.get_user_type(msg.get("recipient_nickname"))
+                msg["sender_user_type"] = sender_type if sender_type is not None else 0
+                msg["recipient_user_type"] = recipient_type if recipient_type is not None else 0
+                messages.append(msg)
+        
+            return MessageListResponse(
+                messages=messages,
+                unread_count=unread_count,
+            )
+            
         case db.GROUP_USER_TYPE:
-            sender_filter = None
-        case db.PRIVATE_USER_TYPE:
-            sender_filter = sender_nickname
+            m_sender_nickname = None
+            m_recipient_nickname = sender_nickname
+            
+            rows = db.get_message_list(
+                m_sender_nickname,
+                m_recipient_nickname,
+                to_int(after_id),
+            )
+        
+            unread_count = db.get_unread_messages_count(
+                sender_nickname,
+                recipient_nickname,
+            )
+            
+            if reset_unread_count_status == "1":
+                db.clear_unread_messages_count(
+                    sender_nickname,
+                    recipient_nickname,
+                )
+            messages = []
+            for row in rows:
+                msg = db.row_to_message(row)
+                sender_type = db.get_user_type(msg.get("sender_nickname"))
+                recipient_type = db.get_user_type(msg.get("recipient_nickname"))
+                msg["sender_user_type"] = sender_type if sender_type is not None else 0
+                msg["recipient_user_type"] = recipient_type if recipient_type is not None else 0
+                messages.append(msg)
+        
+            return MessageListResponse(
+                messages=messages,
+                unread_count=unread_count,
+            )
         case _:
             raise HTTPException(status_code=404, detail="Recipient not found")
 
-    rows = db.get_message_list(
-        sender_filter,
-        recipient_nickname,
-        to_int(after_id),
-    )
-
-    unread_count = db.get_unread_messages_count(
-        sender_nickname,
-        recipient_nickname,
-    )
-    
-    if reset_unread_count_status == "1":
-        db.clear_unread_messages_count(
-            sender_nickname,
-            recipient_nickname,
-        )
-    messages = []
-    for row in rows:
-        msg = db.row_to_message(row)
-        sender_type = db.get_user_type(msg.get("sender_nickname"))
-        recipient_type = db.get_user_type(msg.get("recipient_nickname"))
-        msg["sender_user_type"] = sender_type if sender_type is not None else 0
-        msg["recipient_user_type"] = recipient_type if recipient_type is not None else 0
-        messages.append(msg)
-
-    return MessageListResponse(
-        messages=messages,
-        unread_count=unread_count,
-    )
 
 @api_router.post("/message", response_model=MessageResponse)
 def post_message(body: PostMessageRequest):
