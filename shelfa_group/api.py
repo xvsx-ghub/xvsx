@@ -344,7 +344,13 @@ def create_contact(body: PostContactRequest):
             detail=str(e),
         )
 
-    return ContactResponse(**row)
+    data = dict(row)
+    sender_type = db.get_user_type(data.get("sender_nickname"))
+    recipient_type = db.get_user_type(data.get("recipient_nickname"))
+    data["sender_user_type"] = sender_type if sender_type is not None else 0
+    data["recipient_user_type"] = recipient_type if recipient_type is not None else 0
+
+    return ContactResponse(**data)
 
 
 @api_router.get("/contact_list", response_model=ContactListResponse)
