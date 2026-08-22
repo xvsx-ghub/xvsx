@@ -200,12 +200,15 @@ def post_message(body: PostMessageRequest):
 
     if recipient_type == db.GROUP_USER_TYPE:
         for nickname in db.get_sender_nickname_list(body.recipient_nickname):
-            if nickname == body.sender_nickname:
-                continue
-
-            db.increment_unread_messages_count(
-                nickname,
+            
+            logger.info(
+                "recipient_type == db.GROUP_USER_TYPE. sender=%s recipient=%s",
                 body.recipient_nickname,
+                nickname,
+            )            
+            db.increment_unread_messages_count(
+                body.recipient_nickname,
+                nickname,
             )
             
             fcm.send_alert_notification(
@@ -213,12 +216,18 @@ def post_message(body: PostMessageRequest):
                 title=f"{body.sender_nickname} in group {body.recipient_nickname}",
                 body=body.message_content,
                 badge=db.get_unread_messages_count(
-                    nickname,
                     body.recipient_nickname,
+                    nickname,
                 ),
             )
 
     elif recipient_type == db.PRIVATE_USER_TYPE:
+        logger.info(
+            "recipient_type == db.PRIVATE_USER_TYPE. sender=%s recipient=%s",
+            body.sender_nickname,
+            body.recipient_nickname,
+        )  
+        
         db.increment_unread_messages_count(
             body.sender_nickname,
             body.recipient_nickname,
