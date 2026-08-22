@@ -241,7 +241,9 @@ def post_message(body: PostMessageRequest):
         message_type=row["message_type"],
         message_content=row["message_content"],
         sender_nickname=row["sender_nickname"],
+        sender_user_type=(db.get_user_type(row["sender_nickname"]) or 0),
         recipient_nickname=row["recipient_nickname"],
+        recipient_user_type=(db.get_user_type(row["recipient_nickname"]) or 0),
         timestamp_unix=row["timestamp_unix"],
     )
 
