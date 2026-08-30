@@ -10,15 +10,15 @@ from shelfa.config import FIREBASE_AUTH_PATH
 logger = logging.getLogger("xvsx")
 
 
-def init_firebase() -> bool:
-    """Initialize Firebase once."""
+def init_firebase(app_name: str = "shelfa") -> bool:
+    """Initialize Firebase once per app name."""
     try:
-        get_app()
-        logger.info("Firebase already initialized.")
+        get_app(app_name)
+        logger.info("Firebase app %s already initialized.", app_name)
     except ValueError:
-        logger.info("Initializing Firebase...")
-        initialize_app(credentials.Certificate(FIREBASE_AUTH_PATH))
-        logger.info("Firebase initialized successfully.")
+        logger.info("Initializing Firebase app %s...", app_name)
+        initialize_app(credentials.Certificate(FIREBASE_AUTH_PATH), name=app_name)
+        logger.info("Firebase app %s initialized successfully.", app_name)
 
     return True
 
@@ -38,15 +38,26 @@ def _fcm_data_payload(
 
 
 def send_alert_notification(
-    token: str,
+    token: str | None,
     title: str,
     body: str,
     data: Mapping[str, Any] | None = None,
     badge: int | None = None,
 ) -> str:
+    token_value = str(token).strip() if token is not None else ""
+    if not token_value:
+        logger.warning("Skipping FCM alert notification because token is missing.")
+        return ""
+    if len(token_value) < 10 or any(ch.isspace() for ch in token_value):
+        logger.warning(
+            "Skipping FCM alert notification because token format looks invalid: %s",
+            token_value[:12],
+        )
+        return ""
+
     logger.info(
         "Preparing to send FCM alert notification to token=%s...",
-        token[:12],
+        token_value[:12],
     )
 
     payload = _fcm_data_payload(data, notification_kind="alert")
@@ -66,7 +77,7 @@ def send_alert_notification(
     message = messaging.Message(
         notification=messaging.Notification(title=title, body=body),
         data=payload,
-        token=token,
+        token=token_value,
         android=messaging.AndroidConfig(priority="high"),
         apns=messaging.APNSConfig(
             payload=messaging.APNSPayload(
@@ -77,20 +88,32 @@ def send_alert_notification(
 
     try:
         logger.info("Sending FCM alert notification...")
-        return messaging.send(message)
+        app = get_app("shelfa")
+        return messaging.send(message, app=app)
     except Exception:
         logger.exception("FCM alert send failed")
         raise
 
 
 def send_background_notification(
-    token: str,
+    token: str | None,
     data: Mapping[str, Any],
     badge: int | None = None,
 ) -> str:
+    token_value = str(token).strip() if token is not None else ""
+    if not token_value:
+        logger.warning("Skipping FCM background notification because token is missing.")
+        return ""
+    if len(token_value) < 10 or any(ch.isspace() for ch in token_value):
+        logger.warning(
+            "Skipping FCM background notification because token format looks invalid: %s",
+            token_value[:12],
+        )
+        return ""
+
     logger.info(
         "Preparing to send FCM background notification to token=%s...",
-        token[:12],
+        token_value[:12],
     )
 
     payload = _fcm_data_payload(data, notification_kind="background")
@@ -125,14 +148,15 @@ def send_background_notification(
 
     message = messaging.Message(
         data=payload,
-        token=token,
+        token=token_value,
         android=messaging.AndroidConfig(priority="high"),
         apns=apns,
     )
 
     try:
         logger.info("Sending FCM background notification...")
-        return messaging.send(message)
+        app = get_app("shelfa")
+        return messaging.send(message, app=app)
     except Exception:
         logger.exception("FCM background send failed")
         raise

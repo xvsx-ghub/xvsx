@@ -23,7 +23,7 @@ def init_shelfa(app: FastAPI) -> None:
     database.init_db()
     logger.info("Database initialized.")
 
-    notifications.init_firebase()
+    notifications.init_firebase(app_name="shelfa")
     logger.info("Firebase initialized.")
 
     app.include_router(fcm.router)
