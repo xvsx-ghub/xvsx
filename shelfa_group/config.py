@@ -8,7 +8,7 @@ PRIVATE_DIR = DATA_DIR / "private"
 
 DB_PATH = DATA_DIR / "shelfa.db"
 
-FIREBASE_CREDENTIALS_FILENAME = "shelf-a953d-firebase-adminsdk-fbsvc-ec291cc8bb.json"
+FIREBASE_CREDENTIALS_FILENAME = "shelfa-8ea8b-firebase-adminsdk-fbsvc-e46d2df316.json"
 FIREBASE_AUTH_PATH = PRIVATE_DIR / FIREBASE_CREDENTIALS_FILENAME
 
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024
