@@ -1,7 +1,10 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
 import shelfa.shelfa as shelfaApp
 import shelfa_group.shelfa as shelfaGroupApp
 
@@ -32,11 +35,28 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutting down...")
 
 
+def register_web_routes(app: FastAPI) -> None:
+    web_dir = Path(__file__).resolve().parent / "shelfa_group" / "web"
+
+    @app.get("/web/support")
+    async def support_page():
+        from fastapi.responses import FileResponse
+
+        file_path = web_dir / "support.html"
+        if file_path.exists():
+            return FileResponse(file_path)
+        return {"detail": "Not found"}
+
+    if web_dir.exists():
+        app.mount("/web", StaticFiles(directory=str(web_dir), html=True), name="web")
+
+
 app = FastAPI(
     title="xvsx",
     version="1.0.0",
     lifespan=lifespan,
 )
+register_web_routes(app)
 
 logger.info("Starting the FastAPI application...")
 
