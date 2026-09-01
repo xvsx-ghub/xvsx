@@ -222,9 +222,9 @@ def get_fcm_token_by_nickname(nickname: str) -> Optional[str]:
         return None
     
     
-def update_fcm_token(user_nickname: str, fcm_token: str) -> None:
+def set_fcm_token(user_nickname: str, fcm_token: str) -> Optional[dict]:
     with get_db() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE user
             SET fcm_token = ?
@@ -233,7 +233,16 @@ def update_fcm_token(user_nickname: str, fcm_token: str) -> None:
             (fcm_token, user_nickname),
         )
         conn.commit()
-        
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT * FROM user WHERE user_nickname = ?",
+            (user_nickname,),
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
 
 ##########################################################################################       
 # contact_registry table functions

@@ -341,7 +341,9 @@ def post_fcm_token(body: PostFcmTokenRequest):
         body.user_nickname,
         body.fcm_token,
     )
-    
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+
     return UserResponse(
         id=row["id"],
         user_nickname=row["user_nickname"],
