@@ -48,6 +48,11 @@ class PostUserRequest(BaseModel):
     fcm_token: str = ""
     
     
+class PostFcmTokenRequest(BaseModel):
+    user_nickname: str = ""
+    fcm_token: str = ""
+    
+    
 class PostMessageRequest(BaseModel):
     sender_nickname: str = ""
     recipient_nickname: str = ""
@@ -317,6 +322,35 @@ def post_user(body: PostUserRequest):
     )
 
 
+@api_router.post("/user", response_model=UserResponse)
+def post_fcm_token(body: PostFcmTokenRequest):
+    logger.info(
+        "Updating FCM token. nickname=%s",
+        body.user_nickname,
+    )
+    
+    row = db.get_user_by_nickname(body.user_nickname)
+    
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found.",
+        )
+    
+    row = db.set_fcm_token(
+        body.user_nickname,
+        body.fcm_token,
+    )
+    
+    return UserResponse(
+        id=row["id"],
+        user_nickname=row["user_nickname"],
+        user_type=row["user_type"],
+        device_id=row["device_id"],
+        fcm_token=row["fcm_token"],
+    )
+    
+    
 
 ##########################################################################################
 # contact

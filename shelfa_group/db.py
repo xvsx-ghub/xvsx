@@ -220,6 +220,19 @@ def get_fcm_token_by_nickname(nickname: str) -> Optional[str]:
         if row:
             return row["fcm_token"]
         return None
+    
+    
+def update_fcm_token(user_nickname: str, fcm_token: str) -> None:
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE user
+            SET fcm_token = ?
+            WHERE user_nickname = ?
+            """,
+            (fcm_token, user_nickname),
+        )
+        conn.commit()
         
 
 ##########################################################################################       
