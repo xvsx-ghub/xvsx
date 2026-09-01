@@ -322,7 +322,7 @@ def post_user(body: PostUserRequest):
     )
 
 
-@api_router.post("/user", response_model=UserResponse)
+@api_router.post("/fcm_token", response_model=UserResponse)
 def post_fcm_token(body: PostFcmTokenRequest):
     logger.info(
         "Updating FCM token. nickname=%s",
