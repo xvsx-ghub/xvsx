@@ -54,8 +54,8 @@ def send_alert_notification(
     token: str,
     title: str,
     body: str,
-    data: Mapping[str, Any],
-    badge: int,
+    data: Mapping[str, Any] | None = None,
+    badge: int | None = None,
 ) -> str:
     logger.info(
         "fcm: send_alert_notification(). token=%s: title=%s, body=%s, data=%s, badge=%s",
@@ -67,13 +67,15 @@ def send_alert_notification(
     )
 
     payload = _fcm_data_payload(data, notification_kind="alert")
-    payload["badge"] = str(badge)
+    if badge is not None:
+        payload["badge"] = str(badge)
 
     aps_kwargs = {
         "alert": messaging.ApsAlert(title=title, body=body),
         "sound": "default",
     }
-    aps_kwargs["badge"] = badge
+    if badge is not None:
+        aps_kwargs["badge"] = badge
 
     message = messaging.Message(
         notification=messaging.Notification(title=title, body=body),

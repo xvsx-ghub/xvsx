@@ -222,7 +222,7 @@ def post_message(body: PostMessageRequest):
                         "sender_nickname": body.sender_nickname,
                         "recipient_nickname": body.recipient_nickname,
                         "message_content": body.message_content,
-                        "message_type": body.message_type,
+                        "shelfa_message_type": body.message_type,
                     },
                     badge=db.get_unread_messages_count(
                         body.recipient_nickname,
@@ -256,7 +256,7 @@ def post_message(body: PostMessageRequest):
                     "sender_nickname": body.sender_nickname,
                     "recipient_nickname": body.recipient_nickname,
                     "message_content": body.message_content,
-                    "message_type": body.message_type,
+                    "shelfa_message_type": body.message_type,
                 },
                 badge=db.get_unread_messages_count(
                     body.sender_nickname,
