@@ -233,15 +233,13 @@ def set_fcm_token(user_nickname: str, fcm_token: str) -> Optional[dict]:
             (fcm_token, user_nickname),
         )
         conn.commit()
-        if cursor.rowcount == 0:
-            return None
+        
         row = conn.execute(
             "SELECT * FROM user WHERE user_nickname = ?",
             (user_nickname,),
         ).fetchone()
-        if row is None:
-            return None
-        return dict(row)
+        
+        return dict(row) if row else None
 
 
 ##########################################################################################       

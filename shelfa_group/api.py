@@ -57,7 +57,7 @@ class PostMessageRequest(BaseModel):
     sender_nickname: str = ""
     recipient_nickname: str = ""
     message_content: str = ""
-    message_type: int = 0
+    message_type: str = "0"
     
     
 class FilePathResponse(BaseModel):
@@ -101,7 +101,7 @@ def get_message_list(
     after_id: str | None = Query(None),
 ):
     logger.info(
-        "Listing messages. sender=%s recipient=%s reset_unread_count_status=%s after_id=%s",
+        "api: get_message_list(). sender=%s recipient=%s reset_unread_count_status=%s after_id=%s",
         sender_nickname,
         recipient_nickname,
         reset_unread_count_status,
@@ -185,13 +185,15 @@ def get_message_list(
 @api_router.post("/message", response_model=MessageResponse)
 def post_message(body: PostMessageRequest):
     logger.info(
-        "Posting message. sender=%s recipient=%s type=%s",
+        "api: post_message(). sender=%s recipient=%s message_type=%s message_content=%s",
         body.sender_nickname,
         body.recipient_nickname,
         body.message_type,
+        body.message_content,
     )
 
     recipient_type = db.get_user_type(body.recipient_nickname)
+    
     if recipient_type is None:
         raise HTTPException(status_code=404, detail="Recipient not found")
 
@@ -205,48 +207,73 @@ def post_message(body: PostMessageRequest):
 
     if recipient_type == db.GROUP_USER_TYPE:
         for nickname in db.get_sender_nickname_list(body.recipient_nickname):
-            
-            logger.info(
-                "recipient_type == db.GROUP_USER_TYPE. sender=%s recipient=%s",
-                body.recipient_nickname,
-                nickname,
-            )            
+                       
             db.increment_unread_messages_count(
                 body.recipient_nickname,
                 nickname,
             )
             
-            fcm.send_alert_notification(
-                token=db.get_fcm_token_by_nickname(nickname),
-                title=f"{body.sender_nickname} in group {body.recipient_nickname}",
-                body=body.message_content,
-                badge=db.get_unread_messages_count(
-                    body.recipient_nickname,
+            try:
+                fcm.send_alert_notification(
+                    token=db.get_fcm_token_by_nickname(nickname),
+                    title=f"{body.sender_nickname} in group {body.recipient_nickname}",
+                    body=body.message_content,
+                    data={
+                        "sender_nickname": body.sender_nickname,
+                        "recipient_nickname": body.recipient_nickname,
+                        "message_content": body.message_content,
+                        "message_type": body.message_type,
+                    },
+                    badge=db.get_unread_messages_count(
+                        body.recipient_nickname,
+                        nickname,
+                    ),
+                )
+            except Exception as e:
+                logger.info(
+                    "Failed to send FCM alert notification to nickname=%s: %s",
                     nickname,
-                ),
-            )
+                    e,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to send FCM alert notification to nickname={nickname}: {e}",
+                ) from e
 
     elif recipient_type == db.PRIVATE_USER_TYPE:
-        logger.info(
-            "recipient_type == db.PRIVATE_USER_TYPE. sender=%s recipient=%s",
-            body.sender_nickname,
-            body.recipient_nickname,
-        )  
         
         db.increment_unread_messages_count(
             body.sender_nickname,
             body.recipient_nickname,
         )
         
-        fcm.send_alert_notification(
-            token=db.get_fcm_token_by_nickname(body.recipient_nickname),
-            title=body.sender_nickname,
-            body=body.message_content,
-            badge=db.get_unread_messages_count(
-                body.sender_nickname,
+        try:
+            fcm.send_alert_notification(
+                token=db.get_fcm_token_by_nickname(body.recipient_nickname),
+                title=body.sender_nickname,
+                body=body.message_content,
+                data={
+                    "sender_nickname": body.sender_nickname,
+                    "recipient_nickname": body.recipient_nickname,
+                    "message_content": body.message_content,
+                    "message_type": body.message_type,
+                },
+                badge=db.get_unread_messages_count(
+                    body.sender_nickname,
+                    body.recipient_nickname,
+                ),
+            )
+        except Exception as e:
+            logger.info(
+                "Failed to send FCM alert notification to nickname=%s: %s",
                 body.recipient_nickname,
-            ),
-        )   
+                e,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to send FCM alert notification to nickname={body.recipient_nickname}: {e}",
+            ) from e        
+
     else:
         raise HTTPException(status_code=404, detail="Unknown recipient type")
 
@@ -270,7 +297,7 @@ def post_message(body: PostMessageRequest):
 def get_user_existence(
     user_nickname: str = Query(...),
 ):
-    logger.info("Checking user existence. nickname=%s", user_nickname)
+    logger.info("api: get_user_existence(). nickname=%s", user_nickname)
 
     row = db.get_user_by_nickname(user_nickname)
 
@@ -281,18 +308,13 @@ def get_user_existence(
 
 @api_router.post("/user", response_model=UserResponse)
 def post_user(body: PostUserRequest):
-    logger.info(
-        "Creating/updating user. nickname=%s type=%s device_id=%s",
-        body.user_nickname,
-        body.user_type,
-        body.device_id,
-    )
+    logger.info("api: post_user(). nickname=%s type=%s device_id=%s", body.user_nickname, body.user_type, body.device_id)
     
     row = db.get_user_by_nickname(body.user_nickname)
     
     if row:
         if row["device_id"] == body.device_id:
-            logger.info("User valid.")
+            logger.info("api: post_user(). User already exists with the same device_id. Returning existing user.")
             return UserResponse(
                 id=row["id"],
                 user_nickname=row["user_nickname"],
@@ -300,12 +322,13 @@ def post_user(body: PostUserRequest):
                 device_id=row["device_id"],
                 fcm_token=row["fcm_token"],
             )
-        logger.info("User invalid.")
-        raise HTTPException(
-            status_code=409,
-            detail="User is already registered on another device.",
-        )
-    logger.info("User creating.")
+        else:
+            logger.info("api: post_user(). User already exists with a different device_id. Raising HTTPException.")
+            raise HTTPException(
+                status_code=409,
+                detail="User is already registered on another device.",
+            )
+    logger.info("api: post_user(). Creating new user with nickname=%s, type=%s, device_id=%s", body.user_nickname, body.user_type, body.device_id)
     row = db.set_user(
         body.user_nickname,
         body.user_type,
@@ -324,14 +347,11 @@ def post_user(body: PostUserRequest):
 
 @api_router.post("/fcm_token", response_model=UserResponse)
 def post_fcm_token(body: PostFcmTokenRequest):
-    logger.info(
-        "Updating FCM token. nickname=%s",
-        body.user_nickname,
-    )
+    logger.info("api: post_fcm_token(). user_nickname=%s fcm_token=%s", body.user_nickname, body.fcm_token) 
     
     row = db.get_user_by_nickname(body.user_nickname)
-    
     if row is None:
+        logger.info("api: post_fcm_token(). User not found. nickname=%s", body.user_nickname)
         raise HTTPException(
             status_code=404,
             detail="User not found.",
@@ -342,7 +362,10 @@ def post_fcm_token(body: PostFcmTokenRequest):
         body.fcm_token,
     )
     if row is None:
-        raise HTTPException(status_code=404, detail="User not found.")
+        logger.info("api: post_fcm_token(). Failed to set FCM token for user_nickname=%s", body.user_nickname)
+        raise HTTPException(
+            status_code=404,
+            detail="User not found.")
 
     return UserResponse(
         id=row["id"],
@@ -360,11 +383,7 @@ def post_fcm_token(body: PostFcmTokenRequest):
 
 @api_router.post("/contact", response_model=ContactResponse)
 def create_contact(body: PostContactRequest):
-    logger.info(
-        "Creating contact. sender=%s recipient=%s",
-        body.sender_nickname,
-        body.recipient_nickname,
-    )
+    logger.info("api: create_contact(). sender=%s recipient=%s", body.sender_nickname, body.recipient_nickname)
 
     if body.sender_nickname == body.recipient_nickname:
         raise HTTPException(
@@ -389,15 +408,31 @@ def create_contact(body: PostContactRequest):
             detail=str(e),
         )
         
-    fcm.send_alert_notification(
-        token=db.get_fcm_token_by_nickname(body.recipient_nickname),
-        title=f"{body.sender_nickname} in group {body.recipient_nickname}",
-        body="New contact",
-        badge=db.get_unread_messages_count(
-            body.sender_nickname,
+    try:
+        fcm.send_alert_notification(
+            token=db.get_fcm_token_by_nickname(body.recipient_nickname),
+            title=f"{body.sender_nickname} wants to connect with you",
+            body="New contact request",
+            data={
+                "sender_nickname": body.sender_nickname,
+                "recipient_nickname": body.recipient_nickname,
+            },
+            badge=db.get_unread_messages_count(
+                body.sender_nickname,
+                body.recipient_nickname,
+            ),
+        )
+    except Exception as e:
+        logger.exception(
+            "Failed to send FCM alert notification to nickname=%s: %s",
             body.recipient_nickname,
-        ),
-    )
+            e,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send FCM alert notification to nickname={body.recipient_nickname}: {e}",
+        ) from e
+        
 
     data = dict(row)
     sender_type = db.get_user_type(data.get("sender_nickname"))
@@ -412,7 +447,7 @@ def create_contact(body: PostContactRequest):
 def get_contact_list(
     user_nickname: str = Query(...),
 ):
-    logger.info("Contact list for %s", user_nickname)
+    logger.info("api: get_contact_list(). user_nickname=%s", user_nickname)
     rows = db.get_contact_list(user_nickname)
 
     contact_list = []
@@ -436,6 +471,8 @@ def get_contact_list(
 
 @api_router.post("/file", response_model=FilePathResponse)
 async def post_file(file: UploadFile = File(...)):
+    logger.info("api: post_file(). filename=%s content_type=%s", file.filename, file.content_type)
+    
     content = await file.read()
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
@@ -451,6 +488,8 @@ async def post_file(file: UploadFile = File(...)):
 
 @api_router.get("/file/{name}")
 def get_file(name: str):    
+    logger.info("api: get_file(). name=%s", name)
+    
     safe = Path(name).name
     if safe != name or ".." in name:
         raise HTTPException(status_code=400, detail="bad path")
