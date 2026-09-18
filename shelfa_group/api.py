@@ -314,6 +314,13 @@ def post_user(body: PostUserRequest):
     
     if row:
         if row["device_id"] == body.device_id:
+            if row["fcm_token"] != body.fcm_token:
+                logger.info("api: post_user(). User exists with the same device_id but different fcm_token. Raising HTTPException.")
+                raise HTTPException(
+                    status_code=422,
+                    detail="Fcm token update required.",
+                )
+
             logger.info("api: post_user(). User already exists with the same device_id. Returning existing user.")
             return UserResponse(
                 id=row["id"],
