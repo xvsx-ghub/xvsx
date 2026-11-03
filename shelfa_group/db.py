@@ -1,5 +1,8 @@
+import json
 import sqlite3
 from contextlib import contextmanager
+from math import ceil
+import time
 from typing import Generator
 from typing import Optional
 
@@ -47,7 +50,8 @@ def init() -> None:
                 user_nickname TEXT NOT NULL UNIQUE,
                 user_type INTEGER NOT NULL DEFAULT 0,
                 device_id TEXT NOT NULL,
-                fcm_token TEXT NOT NULL
+                fcm_token TEXT NOT NULL,
+                is_blocked INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -59,6 +63,45 @@ def init() -> None:
                 recipient_nickname TEXT NOT NULL,
                 unread_messages_count INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(sender_nickname, recipient_nickname)
+            )
+            """
+        )
+        user_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(user)")
+        }
+        if "is_blocked" not in user_columns:
+            conn.execute(
+                "ALTER TABLE user ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0"
+            )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                entity TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_login_attempt (
+                client_key TEXT PRIMARY KEY,
+                attempt_count INTEGER NOT NULL,
+                window_started_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_session (
+                session_id TEXT PRIMARY KEY,
+                actor TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                revoked_at INTEGER
             )
             """
         )
@@ -139,8 +182,11 @@ def get_sender_nickname_list(recipient_nickname: str) -> list[str]:
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT DISTINCT sender_nickname FROM message
-            WHERE recipient_nickname = ?
+            SELECT DISTINCT m.sender_nickname
+            FROM message m
+            LEFT JOIN user u ON u.user_nickname = m.sender_nickname
+            WHERE m.recipient_nickname = ?
+              AND COALESCE(u.is_blocked, 0) = 0
             """,
             (recipient_nickname,),
         ).fetchall()
@@ -184,6 +230,29 @@ def set_user(
             "device_id": device_id,
             "fcm_token": fcm_token,
         }
+
+
+def claim_admin_created_user(
+    user_nickname: str,
+    device_id: str,
+    fcm_token: str,
+) -> Optional[dict]:
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE user
+            SET device_id = ?, fcm_token = ?
+            WHERE user_nickname = ? AND device_id = '' AND is_blocked = 0
+            """,
+            (device_id, fcm_token, user_nickname),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM user WHERE user_nickname = ?",
+            (user_nickname,),
+        ).fetchone()
+        return dict(row) if row else None
+
 
 def get_user_type(user_nickname: str) -> Optional[int]:
     with get_db() as conn:
@@ -364,3 +433,537 @@ def create_contact(
 
     return dict(row)
 
+
+def _admin_audit(
+    conn: sqlite3.Connection,
+    actor: str,
+    action: str,
+    entity: str,
+    entity_id: str,
+    details: dict | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO admin_audit (
+            actor, action, entity, entity_id, details_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            actor,
+            action,
+            entity,
+            entity_id,
+            json.dumps(details or {}, separators=(",", ":"), sort_keys=True),
+            int(time.time()),
+        ),
+    )
+
+
+def _admin_page(
+    conn: sqlite3.Connection,
+    count_sql: str,
+    rows_sql: str,
+    params: list,
+    page: int,
+    page_size: int,
+) -> dict:
+    total = conn.execute(count_sql, params).fetchone()[0]
+    rows = conn.execute(
+        rows_sql,
+        [*params, page_size, (page - 1) * page_size],
+    ).fetchall()
+    return {
+        "items": [dict(row) for row in rows],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": ceil(total / page_size) if total else 0,
+    }
+
+
+def _admin_like(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def admin_dashboard_stats() -> dict:
+    with get_db() as conn:
+        counts = conn.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM user WHERE user_type = ?) AS total_users,
+                (SELECT COUNT(*) FROM user WHERE user_type = ?) AS groups,
+                (SELECT COUNT(*) FROM user WHERE is_blocked = 1) AS blocked_users,
+                (SELECT COUNT(*) FROM message) AS total_messages,
+                (SELECT COUNT(*) FROM contact_registry) AS total_contacts,
+                (SELECT COALESCE(SUM(unread_messages_count), 0)
+                 FROM contact_registry) AS unread_messages,
+                (SELECT COUNT(*) FROM message
+                 WHERE timestamp_unix >= ?) AS messages_today
+            """,
+            (
+                PRIVATE_USER_TYPE,
+                GROUP_USER_TYPE,
+                int(time.time()) - 86400,
+            ),
+        ).fetchone()
+        return {
+            **dict(counts),
+            "database_size_bytes": (
+                conn.execute("PRAGMA page_count").fetchone()[0]
+                * conn.execute("PRAGMA page_size").fetchone()[0]
+            ),
+            "sqlite_version": sqlite3.sqlite_version,
+        }
+
+
+def admin_database_info() -> dict:
+    with get_db() as conn:
+        tables = []
+        for row in conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+            """
+        ):
+            table_name = row["name"]
+            quoted_table_name = table_name.replace('"', '""')
+            columns = [
+                column["name"]
+                for column in conn.execute(
+                    f'PRAGMA table_info("{quoted_table_name}")'
+                )
+            ]
+            row_count = conn.execute(
+                f'SELECT COUNT(*) FROM "{quoted_table_name}"'
+            ).fetchone()[0]
+            tables.append(
+                {"name": table_name, "columns": columns, "rows": row_count}
+            )
+        return {
+            "path": str(DB_PATH.name),
+            "size_bytes": (
+                conn.execute("PRAGMA page_count").fetchone()[0]
+                * conn.execute("PRAGMA page_size").fetchone()[0]
+            ),
+            "sqlite_version": sqlite3.sqlite_version,
+            "tables": tables,
+        }
+
+
+def admin_list_users(
+    page: int,
+    page_size: int,
+    search: str | None = None,
+    user_type: int | None = None,
+    status: str | None = None,
+) -> dict:
+    conditions = ["1 = 1"]
+    params: list = []
+    if search:
+        term = _admin_like(search)
+        conditions.append("(u.user_nickname LIKE ? ESCAPE '\\')")
+        params.append(term)
+    if user_type is not None:
+        conditions.append("u.user_type = ?")
+        params.append(user_type)
+    if status == "blocked":
+        conditions.append("u.is_blocked = 1")
+    elif status == "active":
+        conditions.append("u.is_blocked = 0")
+    where = " AND ".join(conditions)
+    with get_db() as conn:
+        return _admin_page(
+            conn,
+            f"SELECT COUNT(*) FROM user u WHERE {where}",
+            f"""
+            SELECT u.id, u.user_nickname, u.user_type, u.is_blocked,
+                   (SELECT COUNT(*) FROM message m
+                    WHERE m.sender_nickname = u.user_nickname
+                       OR m.recipient_nickname = u.user_nickname) AS message_count,
+                   (SELECT MAX(timestamp_unix) FROM message m
+                    WHERE m.sender_nickname = u.user_nickname
+                       OR m.recipient_nickname = u.user_nickname) AS last_active
+            FROM user u WHERE {where}
+            ORDER BY u.id DESC LIMIT ? OFFSET ?
+            """,
+            params,
+            page,
+            page_size,
+        )
+
+
+def admin_create_user(actor: str, nickname: str, user_type: int) -> dict:
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO user (user_nickname, user_type, device_id, fcm_token)
+            VALUES (?, ?, '', '')
+            """,
+            (nickname, user_type),
+        )
+        user_id = cursor.lastrowid
+        _admin_audit(
+            conn,
+            actor,
+            "user.created",
+            "user",
+            str(user_id),
+            {"nickname": nickname, "user_type": user_type},
+        )
+        conn.commit()
+        return {
+            "id": user_id,
+            "user_nickname": nickname,
+            "user_type": user_type,
+            "is_blocked": 0,
+            "message_count": 0,
+            "last_active": None,
+        }
+
+
+def admin_update_user(
+    actor: str,
+    user_id: int,
+    user_type: int | None,
+    is_blocked: bool | None,
+) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, user_nickname, user_type, is_blocked FROM user WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        updated_type = user_type if user_type is not None else row["user_type"]
+        updated_blocked = (
+            int(is_blocked) if is_blocked is not None else row["is_blocked"]
+        )
+        conn.execute(
+            "UPDATE user SET user_type = ?, is_blocked = ? WHERE id = ?",
+            (updated_type, updated_blocked, user_id),
+        )
+        _admin_audit(
+            conn,
+            actor,
+            "user.updated",
+            "user",
+            str(user_id),
+            {
+                "nickname": row["user_nickname"],
+                "user_type": updated_type,
+                "is_blocked": bool(updated_blocked),
+            },
+        )
+        conn.commit()
+        return {
+            "id": user_id,
+            "user_nickname": row["user_nickname"],
+            "user_type": updated_type,
+            "is_blocked": updated_blocked,
+        }
+
+
+def admin_delete_user(actor: str, user_id: int) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT user_nickname FROM user WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        nickname = row["user_nickname"]
+        message_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM message
+            WHERE sender_nickname = ? OR recipient_nickname = ?
+            """,
+            (nickname, nickname),
+        ).fetchone()[0]
+        contact_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM contact_registry
+            WHERE sender_nickname = ? OR recipient_nickname = ?
+            """,
+            (nickname, nickname),
+        ).fetchone()[0]
+        conn.execute(
+            "DELETE FROM message WHERE sender_nickname = ? OR recipient_nickname = ?",
+            (nickname, nickname),
+        )
+        conn.execute(
+            """
+            DELETE FROM contact_registry
+            WHERE sender_nickname = ? OR recipient_nickname = ?
+            """,
+            (nickname, nickname),
+        )
+        conn.execute("DELETE FROM user WHERE id = ?", (user_id,))
+        _admin_audit(
+            conn,
+            actor,
+            "user.deleted",
+            "user",
+            str(user_id),
+            {
+                "nickname": nickname,
+                "messages_deleted": message_count,
+                "contacts_deleted": contact_count,
+            },
+        )
+        conn.commit()
+        return {
+            "id": user_id,
+            "user_nickname": nickname,
+            "messages_deleted": message_count,
+            "contacts_deleted": contact_count,
+        }
+
+
+def admin_list_messages(
+    page: int,
+    page_size: int,
+    search: str | None = None,
+    message_type: int | None = None,
+) -> dict:
+    conditions = ["1 = 1"]
+    params: list = []
+    if search:
+        term = _admin_like(search)
+        conditions.append(
+            "(message_content LIKE ? ESCAPE '\\' "
+            "OR sender_nickname LIKE ? ESCAPE '\\' "
+            "OR recipient_nickname LIKE ? ESCAPE '\\')"
+        )
+        params.extend([term, term, term])
+    if message_type is not None:
+        conditions.append("message_type = ?")
+        params.append(message_type)
+    where = " AND ".join(conditions)
+    with get_db() as conn:
+        return _admin_page(
+            conn,
+            f"SELECT COUNT(*) FROM message WHERE {where}",
+            f"""
+            SELECT id, message_type, message_content, sender_nickname,
+                   recipient_nickname, timestamp_unix
+            FROM message WHERE {where}
+            ORDER BY id DESC LIMIT ? OFFSET ?
+            """,
+            params,
+            page,
+            page_size,
+        )
+
+
+def admin_delete_message(actor: str, message_id: int) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, sender_nickname, recipient_nickname
+            FROM message WHERE id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute("DELETE FROM message WHERE id = ?", (message_id,))
+        _admin_audit(
+            conn,
+            actor,
+            "message.deleted",
+            "message",
+            str(message_id),
+            {
+                "sender_nickname": row["sender_nickname"],
+                "recipient_nickname": row["recipient_nickname"],
+            },
+        )
+        conn.commit()
+        return dict(row)
+
+
+def admin_list_contacts(
+    page: int,
+    page_size: int,
+    search: str | None = None,
+) -> dict:
+    conditions = ["1 = 1"]
+    params: list = []
+    if search:
+        term = _admin_like(search)
+        conditions.append(
+            "(sender_nickname LIKE ? ESCAPE '\\' "
+            "OR recipient_nickname LIKE ? ESCAPE '\\')"
+        )
+        params.extend([term, term])
+    where = " AND ".join(conditions)
+    with get_db() as conn:
+        return _admin_page(
+            conn,
+            f"SELECT COUNT(*) FROM contact_registry WHERE {where}",
+            f"""
+            SELECT id, sender_nickname, recipient_nickname,
+                   unread_messages_count
+            FROM contact_registry WHERE {where}
+            ORDER BY id DESC LIMIT ? OFFSET ?
+            """,
+            params,
+            page,
+            page_size,
+        )
+
+
+def admin_delete_contact(actor: str, contact_id: int) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, sender_nickname, recipient_nickname
+            FROM contact_registry WHERE id = ?
+            """,
+            (contact_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute("DELETE FROM contact_registry WHERE id = ?", (contact_id,))
+        _admin_audit(
+            conn,
+            actor,
+            "contact.deleted",
+            "contact",
+            str(contact_id),
+            {
+                "sender_nickname": row["sender_nickname"],
+                "recipient_nickname": row["recipient_nickname"],
+            },
+        )
+        conn.commit()
+        return dict(row)
+
+
+def admin_list_audit(page: int, page_size: int) -> dict:
+    with get_db() as conn:
+        result = _admin_page(
+            conn,
+            "SELECT COUNT(*) FROM admin_audit",
+            """
+            SELECT id, actor, action, entity, entity_id, details_json, created_at
+            FROM admin_audit ORDER BY id DESC LIMIT ? OFFSET ?
+            """,
+            [],
+            page,
+            page_size,
+        )
+        for item in result["items"]:
+            item["details"] = json.loads(item.pop("details_json"))
+        return result
+
+
+def admin_auth_is_limited(client_key: str, now: int) -> bool:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT attempt_count, window_started_at
+            FROM admin_login_attempt WHERE client_key = ?
+            """,
+            (client_key,),
+        ).fetchone()
+        return bool(
+            row
+            and now - row["window_started_at"] < 900
+            and row["attempt_count"] >= 5
+        )
+
+
+def admin_record_failed_login(client_key: str, now: int) -> None:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT attempt_count, window_started_at
+            FROM admin_login_attempt WHERE client_key = ?
+            """,
+            (client_key,),
+        ).fetchone()
+        if row and now - row["window_started_at"] < 900:
+            conn.execute(
+                """
+                UPDATE admin_login_attempt
+                SET attempt_count = attempt_count + 1
+                WHERE client_key = ?
+                """,
+                (client_key,),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO admin_login_attempt (
+                    client_key, attempt_count, window_started_at
+                )
+                VALUES (?, 1, ?)
+                ON CONFLICT(client_key) DO UPDATE SET
+                    attempt_count = excluded.attempt_count,
+                    window_started_at = excluded.window_started_at
+                """,
+                (client_key, now),
+            )
+        _admin_audit(
+            conn,
+            "unknown",
+            "admin.login_failed",
+            "admin",
+            client_key[:12],
+        )
+        conn.commit()
+
+
+def admin_create_session(
+    actor: str,
+    client_key: str,
+    session_id: str,
+    expires_at: int,
+) -> None:
+    with get_db() as conn:
+        now = int(time.time())
+        conn.execute("DELETE FROM admin_session WHERE expires_at <= ?", (now,))
+        conn.execute(
+            "DELETE FROM admin_login_attempt WHERE client_key = ?",
+            (client_key,),
+        )
+        conn.execute(
+            """
+            INSERT INTO admin_session (session_id, actor, expires_at)
+            VALUES (?, ?, ?)
+            """,
+            (session_id, actor, expires_at),
+        )
+        _admin_audit(conn, actor, "admin.login", "admin", actor)
+        conn.commit()
+
+
+def admin_session_is_active(session_id: str, now: int) -> bool:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM admin_session
+            WHERE session_id = ? AND expires_at > ? AND revoked_at IS NULL
+            """,
+            (session_id, now),
+        ).fetchone()
+        return row is not None
+
+
+def admin_record_logout(actor: str, session_id: str) -> None:
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE admin_session
+            SET revoked_at = ?
+            WHERE session_id = ? AND revoked_at IS NULL
+            """,
+            (int(time.time()), session_id),
+        )
+        if cursor.rowcount:
+            _admin_audit(conn, actor, "admin.logout", "admin", actor)
+        conn.commit()

@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from shelfa_group import api, fcm
+from shelfa_group import admin, api, fcm
 import shelfa_group.config as config
 import shelfa_group.db as db
     
@@ -24,3 +24,5 @@ def init_shelfa(app: FastAPI) -> None:
     
     app.include_router(api.api_router)
     logger.info("API router added.")    
+    app.include_router(admin.router)
+    logger.info("Admin router added.")

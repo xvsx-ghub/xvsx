@@ -17,6 +17,14 @@ api_router = APIRouter(prefix="/shelfa", tags=["api_router"])
 logger = logging.getLogger("shelfa")
 
 
+def ensure_user_is_not_blocked(user_nickname: str | None) -> None:
+    if not user_nickname:
+        return
+    user = db.get_user_by_nickname(user_nickname)
+    if user is not None and user["is_blocked"]:
+        raise HTTPException(status_code=403, detail="User account is blocked")
+
+
 class MessageResponse(BaseModel):
     id: int
     message_type: int
@@ -108,6 +116,8 @@ def get_message_list(
         after_id,
     )
 
+    ensure_user_is_not_blocked(sender_nickname)
+    ensure_user_is_not_blocked(recipient_nickname)
     recipient_type = db.get_user_type(sender_nickname)
 
     match recipient_type:
@@ -192,6 +202,8 @@ def post_message(body: PostMessageRequest):
         body.message_content,
     )
 
+    ensure_user_is_not_blocked(body.sender_nickname)
+    ensure_user_is_not_blocked(body.recipient_nickname)
     recipient_type = db.get_user_type(body.recipient_nickname)
     
     if recipient_type is None:
@@ -303,6 +315,8 @@ def get_user_existence(
 
     if row is None:
         return StatusResponse(status=False)
+    if row["is_blocked"]:
+        raise HTTPException(status_code=403, detail="User account is blocked")
     return StatusResponse(status=True)
 
 
@@ -313,6 +327,31 @@ def post_user(body: PostUserRequest):
     row = db.get_user_by_nickname(body.user_nickname)
     
     if row:
+        if row["is_blocked"]:
+            raise HTTPException(status_code=403, detail="User account is blocked")
+        if not row["device_id"] and body.device_id:
+            row = db.claim_admin_created_user(
+                body.user_nickname,
+                body.device_id,
+                body.fcm_token,
+            )
+            if row and row["is_blocked"]:
+                raise HTTPException(
+                    status_code=403,
+                    detail="User account is blocked",
+                )
+            if row and row["device_id"] == body.device_id:
+                return UserResponse(
+                    id=row["id"],
+                    user_nickname=row["user_nickname"],
+                    user_type=row["user_type"],
+                    device_id=row["device_id"],
+                    fcm_token=row["fcm_token"],
+                )
+            raise HTTPException(
+                status_code=409,
+                detail="User is already registered on another device.",
+            )
         if row["device_id"] == body.device_id:
             if row["fcm_token"] != body.fcm_token:
                 logger.info("api: post_user(). User exists with the same device_id but different fcm_token. Raising HTTPException.")
@@ -363,6 +402,7 @@ def post_fcm_token(body: PostFcmTokenRequest):
             status_code=404,
             detail="User not found.",
         )
+    ensure_user_is_not_blocked(body.user_nickname)
     
     row = db.set_fcm_token(
         body.user_nickname,
@@ -392,6 +432,8 @@ def post_fcm_token(body: PostFcmTokenRequest):
 def create_contact(body: PostContactRequest):
     logger.info("api: create_contact(). sender=%s recipient=%s", body.sender_nickname, body.recipient_nickname)
 
+    ensure_user_is_not_blocked(body.sender_nickname)
+    ensure_user_is_not_blocked(body.recipient_nickname)
     if body.sender_nickname == body.recipient_nickname:
         raise HTTPException(
             status_code=400,
@@ -455,6 +497,7 @@ def get_contact_list(
     user_nickname: str = Query(...),
 ):
     logger.info("api: get_contact_list(). user_nickname=%s", user_nickname)
+    ensure_user_is_not_blocked(user_nickname)
     rows = db.get_contact_list(user_nickname)
 
     contact_list = []
@@ -515,4 +558,3 @@ def to_int(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
-
