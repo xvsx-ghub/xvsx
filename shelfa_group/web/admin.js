@@ -7,6 +7,7 @@ const state = {
   search: { users: "", messages: "", contacts: "" },
   filters: { userType: "", userStatus: "", messageType: "" },
   stats: null,
+  usageLimits: null,
 };
 
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -92,7 +93,7 @@ function setView(name) {
   document.getElementById("sidebar").classList.remove("open");
   const loaders = {
     overview: loadOverview,
-    users: loadUsers,
+    users: () => Promise.all([loadUsers(), loadUsageLimits()]),
     messages: loadMessages,
     contacts: loadContacts,
     database: loadDatabase,
@@ -182,23 +183,36 @@ async function loadUsers() {
   document.getElementById("users-result-count").textContent = `${result.total.toLocaleString()} accounts`;
   document.getElementById("users-table").innerHTML = result.items.length
     ? result.items.map(renderUser).join("")
-    : '<tr><td class="empty-state" colspan="6">No accounts match your filters.</td></tr>';
+    : '<tr><td class="empty-state" colspan="7">No accounts match your filters.</td></tr>';
   renderPagination("users-pagination", result, "users", loadUsers);
 }
 
 function renderUser(user) {
   const nickname = escapeHtml(user.user_nickname);
   const type = Number(user.user_type) === 2 ? "Group" : "Person";
+  const mode = ["free", "limited", "premium"].includes(user.account_mode) ? user.account_mode : "free";
+  const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1);
   const blocked = Boolean(user.is_blocked);
   const initials = nickname.slice(0, 2).toUpperCase();
   return `<tr>
     <td><div class="account-cell"><span class="account-avatar">${initials}</span><span><strong>${nickname}</strong><small>Account #${user.id}</small></span></div></td>
     <td><span class="type-chip ${type === "Group" ? "group" : ""}"><i></i>${type}</span></td>
+    <td><span class="mode-chip ${mode}">${modeLabel}</span></td>
     <td>${Number(user.message_count).toLocaleString()}</td>
     <td>${escapeHtml(relativeDate(user.last_active))}</td>
     <td><span class="status-chip ${blocked ? "blocked" : ""}"><i></i>${blocked ? "Blocked" : "Active"}</span></td>
-    <td><div class="action-cell"><button class="row-action" data-action="edit-user" data-id="${user.id}" data-type="${user.user_type}" data-blocked="${blocked}">Edit</button><button class="row-action" data-action="toggle-user" data-id="${user.id}" data-blocked="${blocked}">${blocked ? "Unblock" : "Block"}</button><button class="row-action danger" data-action="delete-user" data-id="${user.id}" data-name="${nickname}">Delete</button></div></td>
+    <td><div class="action-cell"><button class="row-action" data-action="edit-user" data-id="${user.id}" data-type="${user.user_type}" data-mode="${mode}" data-blocked="${blocked}">Edit</button><button class="row-action" data-action="toggle-user" data-id="${user.id}" data-blocked="${blocked}">${blocked ? "Unblock" : "Block"}</button><button class="row-action danger" data-action="delete-user" data-id="${user.id}" data-name="${nickname}">Delete</button></div></td>
   </tr>`;
+}
+
+async function loadUsageLimits() {
+  const limits = await request("/usage-limits");
+  state.usageLimits = limits;
+  const form = document.getElementById("usage-limits-form");
+  form.elements.free_max_contacts.value = limits.free.max_contacts;
+  form.elements.free_max_history.value = limits.free.max_message_history_per_contact;
+  form.elements.limited_max_contacts.value = limits.limited.max_contacts;
+  form.elements.limited_max_history.value = limits.limited.max_message_history_per_contact;
 }
 
 async function loadMessages() {
@@ -254,6 +268,8 @@ function openCreateUser() {
   const form = document.getElementById("user-form");
   form.reset();
   form.elements.user_id.value = "";
+  form.elements.user_nickname.disabled = false;
+  form.elements.user_nickname.required = true;
   form.elements.user_type.disabled = false;
   document.getElementById("user-dialog-kicker").textContent = "NEW ACCOUNT";
   document.getElementById("user-dialog-title").textContent = "Create user";
@@ -269,12 +285,15 @@ function openEditUser(button) {
   const form = document.getElementById("user-form");
   form.reset();
   form.elements.user_id.value = button.dataset.id;
+  form.elements.user_nickname.disabled = true;
+  form.elements.user_nickname.required = false;
   form.elements.user_type.value = button.dataset.type;
+  form.elements.account_mode.value = button.dataset.mode;
   form.elements.user_type.disabled = false;
   form.elements.is_blocked.checked = button.dataset.blocked === "true";
   document.getElementById("user-dialog-kicker").textContent = "ACCOUNT SETTINGS";
   document.getElementById("user-dialog-title").textContent = "Edit account";
-  document.getElementById("user-dialog-description").textContent = "Update the account type or access status.";
+  document.getElementById("user-dialog-description").textContent = "Update the account type, account mode, or access status.";
   document.getElementById("nickname-field").hidden = true;
   document.getElementById("blocked-field").hidden = false;
   document.getElementById("save-user-button").textContent = "Save changes";
@@ -345,6 +364,7 @@ document.getElementById("user-form").addEventListener("submit", async (event) =>
         method: "PATCH",
         body: JSON.stringify({
           user_type: Number(form.elements.user_type.value),
+          account_mode: form.elements.account_mode.value,
           is_blocked: form.elements.is_blocked.checked,
         }),
       });
@@ -355,6 +375,7 @@ document.getElementById("user-form").addEventListener("submit", async (event) =>
         body: JSON.stringify({
           user_nickname: form.elements.user_nickname.value,
           user_type: Number(form.elements.user_type.value),
+          account_mode: form.elements.account_mode.value,
         }),
       });
       showToast("User created. They can now register their device in the app.");
@@ -362,6 +383,34 @@ document.getElementById("user-form").addEventListener("submit", async (event) =>
     document.getElementById("user-dialog").close();
     state.pages.users = 1;
     await Promise.all([loadUsers(), loadOverview()]);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    submitButton.disabled = false;
+  }
+});
+
+document.getElementById("usage-limits-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = document.getElementById("save-usage-limits");
+  submitButton.disabled = true;
+  try {
+    const updated = await request("/usage-limits", {
+      method: "PUT",
+      body: JSON.stringify({
+        free: {
+          max_contacts: Number(form.elements.free_max_contacts.value),
+          max_message_history_per_contact: Number(form.elements.free_max_history.value),
+        },
+        limited: {
+          max_contacts: Number(form.elements.limited_max_contacts.value),
+          max_message_history_per_contact: Number(form.elements.limited_max_history.value),
+        },
+      }),
+    });
+    state.usageLimits = updated;
+    showToast("Usage limits saved.");
   } catch (error) {
     showToast(error.message, true);
   } finally {

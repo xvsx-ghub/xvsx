@@ -68,8 +68,21 @@
           <div class="page-heading compact-heading"><div><span class="eyebrow">ACCOUNT DIRECTORY</span><h1>Users</h1><p>Create, update, block, and remove workspace accounts.</p></div><button class="button button-primary" id="create-user-button"><span>＋</span> Create user</button></div>
           <section class="panel data-panel">
             <div class="toolbar"><div class="search-field"><span>⌕</span><input type="search" id="user-search" placeholder="Search nicknames…" autocomplete="off"></div><select id="user-type-filter" aria-label="Filter by account type"><option value="">All account types</option><option value="1">Person</option><option value="2">Group</option></select><select id="user-status-filter" aria-label="Filter by account status"><option value="">All statuses</option><option value="active">Active</option><option value="blocked">Blocked</option></select><span class="toolbar-spacer"></span><span class="result-count" id="users-result-count"></span></div>
-            <div class="table-wrap"><table><thead><tr><th>ACCOUNT</th><th>TYPE</th><th>MESSAGES</th><th>LAST ACTIVITY</th><th>STATUS</th><th class="actions-heading">ACTIONS</th></tr></thead><tbody id="users-table"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>ACCOUNT</th><th>TYPE</th><th>PLAN</th><th>MESSAGES</th><th>LAST ACTIVITY</th><th>STATUS</th><th class="actions-heading">ACTIONS</th></tr></thead><tbody id="users-table"></tbody></table></div>
             <div class="pagination" id="users-pagination"></div>
+          </section>
+          <section class="panel usage-limits-panel">
+            <div class="panel-heading"><div><h2>Usage limits</h2><p>Set per-account limits for Free and Limited plans. Premium accounts are unrestricted.</p></div></div>
+            <form id="usage-limits-form">
+              <div class="usage-limit-grid">
+                <label class="field"><span>Free · maximum contacts</span><input type="number" name="free_max_contacts" min="0" max="1000000" required></label>
+                <label class="field"><span>Free · messages per contact</span><input type="number" name="free_max_history" min="0" max="1000000" required></label>
+                <label class="field"><span>Limited · maximum contacts</span><input type="number" name="limited_max_contacts" min="0" max="1000000" required></label>
+                <label class="field"><span>Limited · messages per contact</span><input type="number" name="limited_max_history" min="0" max="1000000" required></label>
+              </div>
+              <p class="usage-limits-note">Changes affect new contact requests and message history returned by the API. Existing messages remain stored. A limit of 0 disables that feature for the plan.</p>
+              <div class="modal-actions"><button type="submit" class="button button-primary" id="save-usage-limits">Save limits</button></div>
+            </form>
           </section>
         </section>
 
@@ -102,6 +115,7 @@
       <div class="modal-heading"><div><span class="eyebrow" id="user-dialog-kicker">NEW ACCOUNT</span><h2 id="user-dialog-title">Create user</h2><p id="user-dialog-description">Add a person or group to the workspace.</p></div><button type="button" class="modal-close" id="close-user-dialog" aria-label="Close dialog">×</button></div>
       <label class="field" id="nickname-field"><span>Nickname</span><input name="user_nickname" maxlength="80" required placeholder="e.g. team-design"></label>
       <label class="field"><span>Account type</span><select name="user_type"><option value="1">Person</option><option value="2">Group</option></select></label>
+      <label class="field"><span>Account mode</span><select name="account_mode"><option value="free">Free</option><option value="limited">Limited</option><option value="premium">Premium</option></select></label>
       <label class="check-field" id="blocked-field"><input type="checkbox" name="is_blocked"><span><strong>Block account</strong><small>Blocked accounts cannot use identity, messaging, or contact endpoints.</small></span></label>
       <input type="hidden" name="user_id">
       <div class="modal-actions"><button type="button" class="button button-secondary" id="cancel-user-dialog">Cancel</button><button type="submit" class="button button-primary" id="save-user-button">Create user</button></div>

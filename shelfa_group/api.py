@@ -47,6 +47,7 @@ class UserResponse(BaseModel):
     user_type: int
     device_id: str
     fcm_token: str
+    account_mode: str = db.FREE_ACCOUNT_MODE
     
     
 class PostUserRequest(BaseModel):
@@ -65,7 +66,7 @@ class PostMessageRequest(BaseModel):
     sender_nickname: str = ""
     recipient_nickname: str = ""
     message_content: str = ""
-    message_type: str = "0"
+    message_type: int = 0
     
     
 class FilePathResponse(BaseModel):
@@ -119,6 +120,7 @@ def get_message_list(
     ensure_user_is_not_blocked(sender_nickname)
     ensure_user_is_not_blocked(recipient_nickname)
     recipient_type = db.get_user_type(sender_nickname)
+    history_limit = db.get_message_history_limit(sender_nickname)
 
     match recipient_type:
         case db.PRIVATE_USER_TYPE:            
@@ -129,6 +131,7 @@ def get_message_list(
                 m_sender_nickname,
                 m_recipient_nickname,
                 to_int(after_id),
+                history_limit=history_limit,
             )
         
             unread_count = db.get_unread_messages_count(
@@ -163,6 +166,7 @@ def get_message_list(
                 m_sender_nickname,
                 m_recipient_nickname,
                 to_int(after_id),
+                history_limit=history_limit,
             )
         
             unread_count = db.get_unread_messages_count(
@@ -209,13 +213,30 @@ def post_message(body: PostMessageRequest):
     if recipient_type is None:
         raise HTTPException(status_code=404, detail="Recipient not found")
 
-    row = db.set_message(
-        body.sender_nickname,
-        body.recipient_nickname,
-        body.message_content,
-        body.message_type,
-        int(time.time()),
-    )
+    if recipient_type == db.GROUP_USER_TYPE:
+        group_members = set(db.get_sender_nickname_list(body.recipient_nickname))
+        group_members.add(body.sender_nickname)
+        contact_pairs = [
+            (body.recipient_nickname, nickname)
+            for nickname in group_members
+        ]
+    else:
+        contact_pairs = [(body.sender_nickname, body.recipient_nickname)]
+
+    try:
+        row = db.set_message(
+            body.sender_nickname,
+            body.recipient_nickname,
+            body.message_content,
+            body.message_type,
+            int(time.time()),
+            contact_pairs=contact_pairs,
+        )
+    except db.ContactLimitExceeded as e:
+        raise HTTPException(
+            status_code=403,
+            detail=str(e),
+        ) from e
 
     if recipient_type == db.GROUP_USER_TYPE:
         for nickname in db.get_sender_nickname_list(body.recipient_nickname):
@@ -234,7 +255,7 @@ def post_message(body: PostMessageRequest):
                         "sender_nickname": body.sender_nickname,
                         "recipient_nickname": body.recipient_nickname,
                         "message_content": body.message_content,
-                        "shelfa_message_type": body.message_type,
+                        "shelfa_message_type": str(body.message_type),
                     },
                     badge=db.get_unread_messages_count(
                         body.recipient_nickname,
@@ -268,7 +289,7 @@ def post_message(body: PostMessageRequest):
                     "sender_nickname": body.sender_nickname,
                     "recipient_nickname": body.recipient_nickname,
                     "message_content": body.message_content,
-                    "shelfa_message_type": body.message_type,
+                    "shelfa_message_type": str(body.message_type),
                 },
                 badge=db.get_unread_messages_count(
                     body.sender_nickname,
@@ -347,6 +368,7 @@ def post_user(body: PostUserRequest):
                     user_type=row["user_type"],
                     device_id=row["device_id"],
                     fcm_token=row["fcm_token"],
+                    account_mode=row["account_mode"],
                 )
             raise HTTPException(
                 status_code=409,
@@ -367,6 +389,7 @@ def post_user(body: PostUserRequest):
                 user_type=row["user_type"],
                 device_id=row["device_id"],
                 fcm_token=row["fcm_token"],
+                account_mode=row["account_mode"],
             )
         else:
             logger.info("api: post_user(). User already exists with a different device_id. Raising HTTPException.")
@@ -388,6 +411,7 @@ def post_user(body: PostUserRequest):
         user_type=row["user_type"],
         device_id=row["device_id"],
         fcm_token=row["fcm_token"],
+        account_mode=row["account_mode"],
     )
 
 
@@ -420,6 +444,7 @@ def post_fcm_token(body: PostFcmTokenRequest):
         user_type=row["user_type"],
         device_id=row["device_id"],
         fcm_token=row["fcm_token"],
+        account_mode=row["account_mode"],
     )
     
     
@@ -451,6 +476,11 @@ def create_contact(body: PostContactRequest):
             body.sender_nickname,
             body.recipient_nickname,
         )
+    except db.ContactLimitExceeded as e:
+        raise HTTPException(
+            status_code=403,
+            detail=str(e),
+        ) from e
     except ValueError as e:
         raise HTTPException(
             status_code=409,
@@ -498,7 +528,10 @@ def get_contact_list(
 ):
     logger.info("api: get_contact_list(). user_nickname=%s", user_nickname)
     ensure_user_is_not_blocked(user_nickname)
-    rows = db.get_contact_list(user_nickname)
+    rows = db.get_contact_list(
+        user_nickname,
+        max_contacts=db.get_contact_limit(user_nickname),
+    )
 
     contact_list = []
     for row in rows:

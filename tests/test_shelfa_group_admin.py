@@ -127,6 +127,193 @@ def test_user_management_blocking_claim_and_audit(client):
     assert client.get("/admin/api/session").json()["authenticated"] is False
 
 
+def test_admin_manages_account_modes_and_usage_limits(client):
+    csrf_token = sign_in(client)
+    headers = {"X-CSRF-Token": csrf_token}
+
+    created = client.post(
+        "/admin/api/users",
+        json={
+            "user_nickname": "limited-member",
+            "user_type": 1,
+            "account_mode": "limited",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200
+    assert created.json()["account_mode"] == "limited"
+
+    updated = client.patch(
+        f"/admin/api/users/{created.json()['id']}",
+        json={"account_mode": "premium"},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["account_mode"] == "premium"
+    assert client.get("/admin/api/users").json()["items"][0]["account_mode"] == "premium"
+    assert client.patch(
+        f"/admin/api/users/{created.json()['id']}",
+        json={"account_mode": "invalid"},
+        headers=headers,
+    ).status_code == 422
+
+    default_limits = client.get("/admin/api/usage-limits")
+    assert default_limits.status_code == 200
+    assert default_limits.json() == {
+        "free": {
+            "max_contacts": 5,
+            "max_message_history_per_contact": 50,
+        },
+        "limited": {
+            "max_contacts": 50,
+            "max_message_history_per_contact": 500,
+        },
+    }
+
+    limits = {
+        "free": {
+            "max_contacts": 3,
+            "max_message_history_per_contact": 25,
+        },
+        "limited": {
+            "max_contacts": 30,
+            "max_message_history_per_contact": 250,
+        },
+    }
+    saved = client.put(
+        "/admin/api/usage-limits",
+        json=limits,
+        headers=headers,
+    )
+    assert saved.status_code == 200
+    assert saved.json() == limits
+    assert client.put(
+        "/admin/api/usage-limits",
+        json=limits,
+    ).status_code == 403
+    assert "usage_limits.updated" in [
+        item["action"] for item in client.get("/admin/api/audit").json()["items"]
+    ]
+
+
+def test_contact_limits_and_premium_access(client, monkeypatch):
+    monkeypatch.setattr(api.fcm, "send_alert_notification", lambda **kwargs: None)
+    db.set_user("free-member", 1, "free-device", "free-token")
+    db.set_user("new-contact", 1, "contact-device", "contact-token")
+    for index in range(5):
+        db.create_contact("free-member", f"existing-{index}")
+
+    blocked = client.post(
+        "/shelfa/contact",
+        json={
+            "sender_nickname": "free-member",
+            "recipient_nickname": "new-contact",
+        },
+    )
+    assert blocked.status_code == 403
+    assert "Contact limit reached" in blocked.json()["detail"]
+    blocked_message = client.post(
+        "/shelfa/message",
+        json={
+            "sender_nickname": "free-member",
+            "recipient_nickname": "new-contact",
+            "message_content": "over the contact limit",
+        },
+    )
+    assert blocked_message.status_code == 403
+    assert db.get_message_list("free-member", "new-contact") == []
+    contacts = client.get(
+        "/shelfa/contact_list?user_nickname=free-member"
+    ).json()["contact_list"]
+    assert len(contacts) == 5
+
+    db.set_user("premium-member", 1, "premium-device", "premium-token")
+    with db.get_db() as connection:
+        connection.execute(
+            "UPDATE user SET account_mode = 'premium' WHERE user_nickname = ?",
+            ("premium-member",),
+        )
+        connection.commit()
+
+    for index in range(6):
+        db.set_user(f"premium-contact-{index}", 1, f"device-{index}", "token")
+        response = client.post(
+            "/shelfa/contact",
+            json={
+                "sender_nickname": "premium-member",
+                "recipient_nickname": f"premium-contact-{index}",
+            },
+        )
+        assert response.status_code == 200
+
+    message = client.post(
+        "/shelfa/message",
+        json={
+            "sender_nickname": "premium-member",
+            "recipient_nickname": "premium-contact-0",
+            "message_content": "premium conversation",
+            "message_type": "0",
+        },
+    )
+    assert message.status_code == 200
+    assert message.json()["message_type"] == 0
+
+
+def test_group_message_cannot_exceed_contact_limit(client, monkeypatch):
+    monkeypatch.setattr(api.fcm, "send_alert_notification", lambda **kwargs: None)
+    db.set_user("group-owner", 2, "group-device", "group-token")
+    for index in range(5):
+        nickname = f"group-member-{index}"
+        db.set_user(nickname, 1, f"device-{index}", "token")
+        db.set_message(nickname, "group-owner", "joined", 0, index)
+    db.set_user("new-group-member", 1, "new-device", "new-token")
+
+    response = client.post(
+        "/shelfa/message",
+        json={
+            "sender_nickname": "new-group-member",
+            "recipient_nickname": "group-owner",
+            "message_content": "over the group contact limit",
+        },
+    )
+    assert response.status_code == 403
+    assert db.get_contact_list("group-owner") == []
+    assert db.get_message_list("new-group-member", "group-owner") == []
+
+
+def test_message_history_limit_and_premium_access(client):
+    db.set_user("history-member", 1, "history-device", "history-token")
+    db.set_user("history-contact", 1, "contact-device", "contact-token")
+    for index in range(51):
+        db.set_message(
+            "history-member",
+            "history-contact",
+            f"message {index}",
+            0,
+            index,
+        )
+
+    limited_history = client.get(
+        "/shelfa/message_list?sender_nickname=history-member"
+        "&recipient_nickname=history-contact"
+    ).json()["messages"]
+    assert len(limited_history) == 50
+    assert limited_history[0]["message_content"] == "message 1"
+    assert limited_history[-1]["message_content"] == "message 50"
+
+    with db.get_db() as connection:
+        connection.execute(
+            "UPDATE user SET account_mode = 'premium' WHERE user_nickname = ?",
+            ("history-member",),
+        )
+        connection.commit()
+    premium_history = client.get(
+        "/shelfa/message_list?sender_nickname=history-member"
+        "&recipient_nickname=history-contact"
+    ).json()["messages"]
+    assert len(premium_history) == 51
+
+
 def test_database_browsing_filters_and_user_delete_cascade(client):
     with db.get_db() as connection:
         connection.execute(
@@ -332,6 +519,7 @@ def test_database_migration_adds_block_status_to_existing_user_table(tmp_path, m
             row["name"] for row in connection.execute("PRAGMA table_info(user)")
         }
     assert "is_blocked" in columns
+    assert "account_mode" in columns
 
 
 def test_shelfa_group_startup_registers_admin_router(tmp_path, monkeypatch):

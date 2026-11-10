@@ -9,7 +9,8 @@ its SQLite database and includes both the app and admin routers. The existing
 `user`, `message`, and `contact_registry` tables remain the source of truth;
 the admin panel uses parameterized queries in `shelfa_group/db.py` and does not
 expose device IDs or Firebase notification tokens. Database initialization
-adds the account-block flag and creates `admin_audit` and
+adds the account-block flag and account mode to existing users, initializes
+Free and Limited usage limits, and creates `admin_audit` and
 `admin_login_attempt` tables in existing databases.
 
 The browser UI is served at `/admin`; its static HTML, CSS, and JavaScript live
@@ -17,6 +18,17 @@ in `shelfa_group/web/`. JSON endpoints are under `/admin/api/`. User, message,
 contact, schema, and audit lists support bounded pagination; the directory
 views support search and account/message filters. Deleting a user also deletes
 their messages and contacts.
+
+Administrators can assign Free, Limited, or Premium mode while creating or
+editing an account. Free and Limited contact and per-contact message-history
+limits can be changed in the Users view; the defaults are 5 contacts and 50
+messages for Free, and 50 contacts and 500 messages for Limited. A zero limit
+disables the corresponding feature. Premium accounts have no usage limits.
+Contact lists expose only the most recent contacts within the account's limit,
+and new contact records are rejected when either participant has reached their
+limit. Message history requests expose only the most recent configured number
+of messages for each conversation; older messages remain stored and become
+available again if the limit is raised or the account is upgraded.
 
 ## Configure administrator access
 

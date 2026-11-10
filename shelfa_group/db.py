@@ -12,6 +12,29 @@ UNKNOWN_USER_TYPE = 0
 PRIVATE_USER_TYPE = 1
 GROUP_USER_TYPE = 2
 
+FREE_ACCOUNT_MODE = "free"
+LIMITED_ACCOUNT_MODE = "limited"
+PREMIUM_ACCOUNT_MODE = "premium"
+ACCOUNT_MODES = (
+    FREE_ACCOUNT_MODE,
+    LIMITED_ACCOUNT_MODE,
+    PREMIUM_ACCOUNT_MODE,
+)
+DEFAULT_ACCOUNT_MODE_LIMITS = {
+    FREE_ACCOUNT_MODE: {
+        "max_contacts": 5,
+        "max_message_history_per_contact": 50,
+    },
+    LIMITED_ACCOUNT_MODE: {
+        "max_contacts": 50,
+        "max_message_history_per_contact": 500,
+    },
+}
+
+
+class ContactLimitExceeded(ValueError):
+    pass
+
 
 
 def get_connection() -> sqlite3.Connection:
@@ -51,7 +74,9 @@ def init() -> None:
                 user_type INTEGER NOT NULL DEFAULT 0,
                 device_id TEXT NOT NULL,
                 fcm_token TEXT NOT NULL,
-                is_blocked INTEGER NOT NULL DEFAULT 0
+                is_blocked INTEGER NOT NULL DEFAULT 0,
+                account_mode TEXT NOT NULL DEFAULT 'free'
+                    CHECK (account_mode IN ('free', 'limited', 'premium'))
             )
             """
         )
@@ -72,6 +97,39 @@ def init() -> None:
         if "is_blocked" not in user_columns:
             conn.execute(
                 "ALTER TABLE user ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0"
+            )
+        if "account_mode" not in user_columns:
+            conn.execute(
+                """
+                ALTER TABLE user
+                ADD COLUMN account_mode TEXT NOT NULL DEFAULT 'free'
+                    CHECK (account_mode IN ('free', 'limited', 'premium'))
+                """
+            )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_mode_limits (
+                account_mode TEXT PRIMARY KEY
+                    CHECK (account_mode IN ('free', 'limited')),
+                max_contacts INTEGER NOT NULL CHECK (max_contacts >= 0),
+                max_message_history_per_contact INTEGER NOT NULL
+                    CHECK (max_message_history_per_contact >= 0)
+            )
+            """
+        )
+        for account_mode, limits in DEFAULT_ACCOUNT_MODE_LIMITS.items():
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO account_mode_limits (
+                    account_mode, max_contacts, max_message_history_per_contact
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    account_mode,
+                    limits["max_contacts"],
+                    limits["max_message_history_per_contact"],
+                ),
             )
         conn.execute(
             """
@@ -117,9 +175,27 @@ def set_message(
     recipient_nickname: str,
     message_content: str,
     message_type: int,
-    timestamp_unix: int
+    timestamp_unix: int,
+    contact_pairs: Optional[list[tuple[str, str]]] = None,
 ) -> dict:
     with get_db() as conn:
+        if contact_pairs is not None:
+            conn.execute("BEGIN IMMEDIATE")
+            for contact_sender, contact_recipient in contact_pairs:
+                _check_contact_capacity(
+                    conn,
+                    contact_sender,
+                    contact_recipient,
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO contact_registry (
+                        sender_nickname, recipient_nickname, unread_messages_count
+                    )
+                    VALUES (?, ?, 0)
+                    """,
+                    (contact_sender, contact_recipient),
+                )
         cursor = conn.execute(
             """
             INSERT INTO message (message_type, message_content, sender_nickname, recipient_nickname, timestamp_unix)
@@ -143,7 +219,8 @@ def get_message_list(
     sender_nickname: Optional[str] = None,
     recipient_nickname: Optional[str] = None,
     after_id: Optional[int] = None,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    history_limit: Optional[int] = None,
 ) -> list[dict]:
     with get_db() as conn:
         query = "SELECT * FROM message WHERE 1=1"
@@ -164,10 +241,24 @@ def get_message_list(
             query += " AND ((sender_nickname = ? AND recipient_nickname = ?) OR (sender_nickname = ? AND recipient_nickname = ?))"
             params.extend([sender_nickname, recipient_nickname, recipient_nickname, sender_nickname])
             
+        if history_limit is not None:
+            partition_user = sender_nickname or recipient_nickname
+            query = (
+                "SELECT * FROM ("
+                "SELECT message.*, ROW_NUMBER() OVER ("
+                "PARTITION BY CASE WHEN sender_nickname = ? "
+                "THEN recipient_nickname ELSE sender_nickname END "
+                "ORDER BY id DESC) AS history_rank "
+                f"{query[query.index('FROM message'):]}"
+                ") WHERE history_rank <= ?"
+            )
+            params.insert(0, partition_user)
+            params.append(history_limit)
+
         if after_id is not None:
             query += " AND id > ?"
             params.append(after_id)
-            
+
         query += " ORDER BY id ASC"
         if limit is not None:
             query += " LIMIT ?"
@@ -229,6 +320,7 @@ def set_user(
             "user_type": user_type,
             "device_id": device_id,
             "fcm_token": fcm_token,
+            "account_mode": FREE_ACCOUNT_MODE,
         }
 
 
@@ -264,6 +356,73 @@ def get_user_type(user_nickname: str) -> Optional[int]:
         if row:
             return row["user_type"]
         return None
+
+
+def get_account_mode(user_nickname: str) -> str:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT account_mode FROM user WHERE user_nickname = ?",
+            (user_nickname,),
+        ).fetchone()
+        return row["account_mode"] if row else FREE_ACCOUNT_MODE
+
+
+def get_message_history_limit(user_nickname: str) -> Optional[int]:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT u.account_mode, l.max_message_history_per_contact
+            FROM user u
+            LEFT JOIN account_mode_limits l ON l.account_mode = u.account_mode
+            WHERE u.user_nickname = ?
+            """,
+            (user_nickname,),
+        ).fetchone()
+        if row is None:
+            return DEFAULT_ACCOUNT_MODE_LIMITS[FREE_ACCOUNT_MODE][
+                "max_message_history_per_contact"
+            ]
+        if row["account_mode"] == PREMIUM_ACCOUNT_MODE:
+            return None
+        return row["max_message_history_per_contact"]
+
+
+def get_contact_limit(user_nickname: str) -> Optional[int]:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT u.account_mode, l.max_contacts
+            FROM user u
+            LEFT JOIN account_mode_limits l ON l.account_mode = u.account_mode
+            WHERE u.user_nickname = ?
+            """,
+            (user_nickname,),
+        ).fetchone()
+        if row is None:
+            return DEFAULT_ACCOUNT_MODE_LIMITS[FREE_ACCOUNT_MODE]["max_contacts"]
+        if row["account_mode"] == PREMIUM_ACCOUNT_MODE:
+            return None
+        return row["max_contacts"]
+
+
+def get_account_mode_limits() -> dict[str, dict[str, int]]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT account_mode, max_contacts, max_message_history_per_contact
+            FROM account_mode_limits
+            ORDER BY account_mode
+            """
+        ).fetchall()
+    return {
+        row["account_mode"]: {
+            "max_contacts": row["max_contacts"],
+            "max_message_history_per_contact": row[
+                "max_message_history_per_contact"
+            ],
+        }
+        for row in rows
+    }
 
 
 def get_user_by_nickname(user_nickname: str) -> Optional[sqlite3.Row]:
@@ -363,18 +522,52 @@ def clear_unread_messages_count(sender_nickname: str, recipient_nickname: str) -
         conn.commit()
   
   
-def get_contact_list(user_nickname: str) -> list[dict]:
+def get_contact_list(
+    user_nickname: str,
+    max_contacts: Optional[int] = None,
+) -> list[dict]:
     with get_db() as conn:
-        rows = conn.execute(
-            """
+        query = """
             SELECT *
             FROM contact_registry
             WHERE sender_nickname = ?
                OR recipient_nickname = ?
             ORDER BY id
-            """,
-            (user_nickname, user_nickname),
-        ).fetchall()
+            """
+        if max_contacts is None:
+            rows = conn.execute(query, (user_nickname, user_nickname)).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT c.*
+                FROM contact_registry c
+                WHERE (c.sender_nickname = ? OR c.recipient_nickname = ?)
+                  AND CASE WHEN c.sender_nickname = ? THEN c.recipient_nickname
+                           ELSE c.sender_nickname END IN (
+                    SELECT counterpart
+                    FROM (
+                        SELECT CASE WHEN sender_nickname = ? THEN recipient_nickname
+                                    ELSE sender_nickname END AS counterpart,
+                               MAX(id) AS latest_id
+                        FROM contact_registry
+                        WHERE sender_nickname = ? OR recipient_nickname = ?
+                        GROUP BY counterpart
+                        ORDER BY latest_id DESC
+                        LIMIT ?
+                    )
+                  )
+                ORDER BY c.id
+                """,
+                (
+                    user_nickname,
+                    user_nickname,
+                    user_nickname,
+                    user_nickname,
+                    user_nickname,
+                    user_nickname,
+                    max_contacts,
+                ),
+            ).fetchall()
 
     return [dict(row) for row in rows]  
   
@@ -401,11 +594,79 @@ def get_contact_nickname_list(user_nickname: str) -> list[str]:
     return [row["nickname"] for row in rows]
 
 
+def _check_contact_capacity(
+    conn: sqlite3.Connection,
+    sender_nickname: str,
+    recipient_nickname: str,
+) -> None:
+    existing = conn.execute(
+        """
+        SELECT 1 FROM contact_registry
+        WHERE (sender_nickname = ? AND recipient_nickname = ?)
+           OR (sender_nickname = ? AND recipient_nickname = ?)
+        """,
+        (
+            sender_nickname,
+            recipient_nickname,
+            recipient_nickname,
+            sender_nickname,
+        ),
+    ).fetchone()
+    if existing:
+        return
+
+    for nickname in (sender_nickname, recipient_nickname):
+        user = conn.execute(
+            "SELECT account_mode FROM user WHERE user_nickname = ?",
+            (nickname,),
+        ).fetchone()
+        account_mode = user["account_mode"] if user else FREE_ACCOUNT_MODE
+        if account_mode == PREMIUM_ACCOUNT_MODE:
+            continue
+        limits = conn.execute(
+            """
+            SELECT max_contacts FROM account_mode_limits
+            WHERE account_mode = ?
+            """,
+            (account_mode,),
+        ).fetchone()
+        if limits is None:
+            raise RuntimeError(f"Missing usage limits for account mode: {account_mode}")
+        contact_count = conn.execute(
+            """
+            SELECT COUNT(DISTINCT CASE
+                WHEN sender_nickname = ? THEN recipient_nickname
+                ELSE sender_nickname
+            END)
+            FROM contact_registry
+            WHERE sender_nickname = ? OR recipient_nickname = ?
+            """,
+            (nickname, nickname, nickname),
+        ).fetchone()[0]
+        if contact_count >= limits["max_contacts"]:
+            raise ContactLimitExceeded(
+                f"Contact limit reached for user '{nickname}'"
+            )
+
+
 def create_contact(
     sender_nickname: str,
     recipient_nickname: str,
 ) -> dict:
     with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            """
+            SELECT 1 FROM contact_registry
+            WHERE sender_nickname = ? AND recipient_nickname = ?
+            """,
+            (sender_nickname, recipient_nickname),
+        ).fetchone()
+        if existing:
+            raise ValueError("Contact already exists")
+
+        _check_contact_capacity(conn, sender_nickname, recipient_nickname)
+
         try:
             cursor = conn.execute(
                 """
@@ -580,6 +841,7 @@ def admin_list_users(
             f"SELECT COUNT(*) FROM user u WHERE {where}",
             f"""
             SELECT u.id, u.user_nickname, u.user_type, u.is_blocked,
+                   u.account_mode,
                    (SELECT COUNT(*) FROM message m
                     WHERE m.sender_nickname = u.user_nickname
                        OR m.recipient_nickname = u.user_nickname) AS message_count,
@@ -595,14 +857,21 @@ def admin_list_users(
         )
 
 
-def admin_create_user(actor: str, nickname: str, user_type: int) -> dict:
+def admin_create_user(
+    actor: str,
+    nickname: str,
+    user_type: int,
+    account_mode: str = FREE_ACCOUNT_MODE,
+) -> dict:
     with get_db() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO user (user_nickname, user_type, device_id, fcm_token)
-            VALUES (?, ?, '', '')
+            INSERT INTO user (
+                user_nickname, user_type, device_id, fcm_token, account_mode
+            )
+            VALUES (?, ?, '', '', ?)
             """,
-            (nickname, user_type),
+            (nickname, user_type, account_mode),
         )
         user_id = cursor.lastrowid
         _admin_audit(
@@ -611,7 +880,11 @@ def admin_create_user(actor: str, nickname: str, user_type: int) -> dict:
             "user.created",
             "user",
             str(user_id),
-            {"nickname": nickname, "user_type": user_type},
+            {
+                "nickname": nickname,
+                "user_type": user_type,
+                "account_mode": account_mode,
+            },
         )
         conn.commit()
         return {
@@ -619,6 +892,7 @@ def admin_create_user(actor: str, nickname: str, user_type: int) -> dict:
             "user_nickname": nickname,
             "user_type": user_type,
             "is_blocked": 0,
+            "account_mode": account_mode,
             "message_count": 0,
             "last_active": None,
         }
@@ -629,10 +903,14 @@ def admin_update_user(
     user_id: int,
     user_type: int | None,
     is_blocked: bool | None,
+    account_mode: str | None = None,
 ) -> dict | None:
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, user_nickname, user_type, is_blocked FROM user WHERE id = ?",
+            """
+            SELECT id, user_nickname, user_type, is_blocked, account_mode
+            FROM user WHERE id = ?
+            """,
             (user_id,),
         ).fetchone()
         if row is None:
@@ -641,9 +919,14 @@ def admin_update_user(
         updated_blocked = (
             int(is_blocked) if is_blocked is not None else row["is_blocked"]
         )
+        updated_mode = account_mode if account_mode is not None else row["account_mode"]
         conn.execute(
-            "UPDATE user SET user_type = ?, is_blocked = ? WHERE id = ?",
-            (updated_type, updated_blocked, user_id),
+            """
+            UPDATE user
+            SET user_type = ?, is_blocked = ?, account_mode = ?
+            WHERE id = ?
+            """,
+            (updated_type, updated_blocked, updated_mode, user_id),
         )
         _admin_audit(
             conn,
@@ -655,6 +938,7 @@ def admin_update_user(
                 "nickname": row["user_nickname"],
                 "user_type": updated_type,
                 "is_blocked": bool(updated_blocked),
+                "account_mode": updated_mode,
             },
         )
         conn.commit()
@@ -663,7 +947,36 @@ def admin_update_user(
             "user_nickname": row["user_nickname"],
             "user_type": updated_type,
             "is_blocked": updated_blocked,
+            "account_mode": updated_mode,
         }
+
+
+def admin_update_account_mode_limits(actor: str, limits: dict) -> dict:
+    with get_db() as conn:
+        for account_mode in (FREE_ACCOUNT_MODE, LIMITED_ACCOUNT_MODE):
+            mode_limits = limits[account_mode]
+            conn.execute(
+                """
+                UPDATE account_mode_limits
+                SET max_contacts = ?, max_message_history_per_contact = ?
+                WHERE account_mode = ?
+                """,
+                (
+                    mode_limits["max_contacts"],
+                    mode_limits["max_message_history_per_contact"],
+                    account_mode,
+                ),
+            )
+            _admin_audit(
+                conn,
+                actor,
+                "usage_limits.updated",
+                "account_mode",
+                account_mode,
+                mode_limits,
+            )
+        conn.commit()
+    return get_account_mode_limits()
 
 
 def admin_delete_user(actor: str, user_id: int) -> dict | None:

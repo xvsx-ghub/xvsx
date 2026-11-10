@@ -9,6 +9,7 @@ import sqlite3
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 from typing import Any
 from typing import Annotated
 
@@ -53,6 +54,7 @@ class LoginRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     user_nickname: str = Field(min_length=1, max_length=80)
     user_type: int = Field(default=db.PRIVATE_USER_TYPE, ge=1, le=2)
+    account_mode: Literal["free", "limited", "premium"] = db.FREE_ACCOUNT_MODE
 
     @field_validator("user_nickname")
     @classmethod
@@ -66,6 +68,17 @@ class CreateUserRequest(BaseModel):
 class UpdateUserRequest(BaseModel):
     user_type: int | None = Field(default=None, ge=1, le=2)
     is_blocked: bool | None = None
+    account_mode: Literal["free", "limited", "premium"] | None = None
+
+
+class AccountModeLimits(BaseModel):
+    max_contacts: int = Field(ge=0, le=1_000_000)
+    max_message_history_per_contact: int = Field(ge=0, le=1_000_000)
+
+
+class UpdateAccountModeLimitsRequest(BaseModel):
+    free: AccountModeLimits
+    limited: AccountModeLimits
 
 
 class AdminSession(BaseModel):
@@ -333,6 +346,7 @@ def create_user(
             session.username,
             body.user_nickname,
             body.user_type,
+            body.account_mode,
         )
     except sqlite3.IntegrityError as error:
         if "UNIQUE constraint failed: user.user_nickname" in str(error):
@@ -349,17 +363,38 @@ def update_user(
     body: UpdateUserRequest,
     session: AdminSession = Depends(require_csrf),
 ) -> dict:
-    if body.user_type is None and body.is_blocked is None:
+    if (
+        body.user_type is None
+        and body.is_blocked is None
+        and body.account_mode is None
+    ):
         raise HTTPException(status_code=422, detail="No user changes were provided")
     result = db.admin_update_user(
         session.username,
         user_id,
         body.user_type,
         body.is_blocked,
+        body.account_mode,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="User not found")
     return result
+
+
+@router.get("/admin/api/usage-limits")
+def get_usage_limits(_: AdminSession = Depends(require_admin)) -> dict:
+    return db.get_account_mode_limits()
+
+
+@router.put("/admin/api/usage-limits")
+def update_usage_limits(
+    body: UpdateAccountModeLimitsRequest,
+    session: AdminSession = Depends(require_csrf),
+) -> dict:
+    return db.admin_update_account_mode_limits(
+        session.username,
+        body.model_dump(),
+    )
 
 
 @router.delete("/admin/api/users/{user_id}")
