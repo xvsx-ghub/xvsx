@@ -91,6 +91,31 @@ def init() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS call_session (
+                call_id TEXT PRIMARY KEY,
+                room_name TEXT NOT NULL UNIQUE,
+                caller_nickname TEXT NOT NULL,
+                callee_nickname TEXT NOT NULL,
+                call_type TEXT NOT NULL CHECK (call_type IN ('audio', 'video')),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'ringing', 'active', 'ended', 'declined',
+                        'cancelled', 'busy', 'expired', 'failed'
+                    )
+                ),
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS call_session_participants_status
+            ON call_session (caller_nickname, callee_nickname, status)
+            """
+        )
         user_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(user)")
         }
@@ -405,6 +430,149 @@ def get_contact_limit(user_nickname: str) -> Optional[int]:
         return row["max_contacts"]
 
 
+def create_call_session(
+    call_id: str,
+    room_name: str,
+    caller_nickname: str,
+    callee_nickname: str,
+    call_type: str,
+    now: int,
+) -> bool:
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE call_session
+            SET status = 'expired', updated_at = ?
+            WHERE (status = 'ringing' AND created_at <= ?)
+               OR (status = 'active' AND updated_at <= ?)
+            """,
+            (now, now - 45, now - 4 * 60 * 60),
+        )
+        existing = conn.execute(
+            """
+            SELECT 1 FROM call_session
+            WHERE status IN ('ringing', 'active')
+              AND (
+                  caller_nickname IN (?, ?)
+                  OR callee_nickname IN (?, ?)
+              )
+            LIMIT 1
+            """,
+            (
+                caller_nickname,
+                callee_nickname,
+                caller_nickname,
+                callee_nickname,
+            ),
+        ).fetchone()
+        if existing:
+            conn.commit()
+            return False
+        conn.execute(
+            """
+            INSERT INTO call_session (
+                call_id, room_name, caller_nickname, callee_nickname,
+                call_type, status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'ringing', ?, ?)
+            """,
+            (
+                call_id,
+                room_name,
+                caller_nickname,
+                callee_nickname,
+                call_type,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return True
+
+
+def transition_call_session(
+    call_id: str,
+    actor_nickname: str,
+    other_nickname: str,
+    action: str,
+    call_type: str,
+    now: int,
+) -> tuple[dict | None, bool]:
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE call_session
+            SET status = 'expired', updated_at = ?
+            WHERE (status = 'ringing' AND created_at <= ?)
+               OR (status = 'active' AND updated_at <= ?)
+            """,
+            (now, now - 45, now - 4 * 60 * 60),
+        )
+        row = conn.execute(
+            "SELECT * FROM call_session WHERE call_id = ?",
+            (call_id,),
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return None, False
+        if row["call_type"] != call_type:
+            conn.commit()
+            raise ValueError("Call type does not match")
+
+        actor_is_caller = (
+            actor_nickname == row["caller_nickname"]
+            and other_nickname == row["callee_nickname"]
+        )
+        actor_is_callee = (
+            actor_nickname == row["callee_nickname"]
+            and other_nickname == row["caller_nickname"]
+        )
+        if not actor_is_caller and not actor_is_callee:
+            conn.commit()
+            raise PermissionError("User is not a participant in this call")
+        if action in {"join", "decline", "busy"} and not actor_is_callee:
+            conn.commit()
+            raise PermissionError("Only the invited user can perform this action")
+        if action == "cancel" and not actor_is_caller:
+            conn.commit()
+            raise PermissionError("Only the caller can cancel this call")
+
+        status = row["status"]
+        if status not in {"ringing", "active"}:
+            conn.commit()
+            return dict(row), False
+
+        if action == "join":
+            if status != "ringing":
+                conn.commit()
+                raise ValueError("Call is no longer waiting for an answer")
+            next_status = "active"
+        elif action == "decline":
+            next_status = "declined"
+        elif action == "cancel":
+            next_status = "cancelled"
+        elif action == "busy":
+            next_status = "busy"
+        else:
+            next_status = "ended"
+
+        conn.execute(
+            """
+            UPDATE call_session SET status = ?, updated_at = ?
+            WHERE call_id = ?
+            """,
+            (next_status, now, call_id),
+        )
+        updated = conn.execute(
+            "SELECT * FROM call_session WHERE call_id = ?",
+            (call_id,),
+        ).fetchone()
+        conn.commit()
+        return dict(updated), True
+
+
 def get_account_mode_limits() -> dict[str, dict[str, int]]:
     with get_db() as conn:
         rows = conn.execute(
@@ -592,6 +760,25 @@ def get_contact_nickname_list(user_nickname: str) -> list[str]:
         ).fetchall()
 
     return [row["nickname"] for row in rows]
+
+
+def are_contacts(first_nickname: str, second_nickname: str) -> bool:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM contact_registry
+            WHERE (sender_nickname = ? AND recipient_nickname = ?)
+               OR (sender_nickname = ? AND recipient_nickname = ?)
+            LIMIT 1
+            """,
+            (
+                first_nickname,
+                second_nickname,
+                second_nickname,
+                first_nickname,
+            ),
+        ).fetchone()
+    return row is not None
 
 
 def _check_contact_capacity(

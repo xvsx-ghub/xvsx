@@ -30,6 +30,32 @@ limit. Message history requests expose only the most recent configured number
 of messages for each conversation; older messages remain stored and become
 available again if the limit is raised or the account is upgraded.
 
+## Audio and video calls
+
+The Android/iOS client connects directly to LiveKit, while this backend issues
+short-lived room participant tokens and uses Firebase Cloud Messaging (FCM) for
+incoming call invites and call-state signals. Configure these server-side
+environment variables before enabling calls:
+
+- `LIVEKIT_URL`: the LiveKit `wss://` server URL (local development may use
+  `ws://`).
+- `LIVEKIT_API_KEY`: the LiveKit API key.
+- `LIVEKIT_API_SECRET`: the LiveKit API secret (at least 32 bytes).
+
+The client posts to `/shelfa/call` with `sender_nickname`, `device_id`,
+`recipient_nickname`, `call_type` (`audio` or `video`), and `action`
+(`start`, `join`, `end`, `decline`, `cancel`, or `busy`); all actions except
+`start` also include `call_id`. The backend verifies that `device_id` matches
+the sender's registered device and that call participants are contacts. Update
+the client request to include its registered device ID. API keys and secrets
+must remain server-side.
+
+`start` returns a `call_id`, room name, LiveKit URL, and caller token, then
+sends the callee an FCM invite. `join` returns a token for the same room.
+Tokens use opaque participant identities and expire after four hours. Call
+invites use alert pushes; end, decline, cancel, and busy signals use data-only
+background pushes.
+
 ## Configure administrator access
 
 Set these environment variables on the server before starting the application:

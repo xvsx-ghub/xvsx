@@ -1,13 +1,20 @@
+import hmac
 import logging
 from pathlib import Path
 import time
-from typing import Optional
+import uuid
+from typing import Literal, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from shelfa_group.config import MAX_UPLOAD_BYTES, UPLOAD_DIR
+from shelfa_group.calls import (
+    LiveKitConfigurationError,
+    create_participant_token,
+    livekit_configuration,
+)
 import shelfa_group.db as db
 import shelfa_group.fcm as fcm
 from shelfa_group.storage import upload
@@ -67,6 +74,38 @@ class PostMessageRequest(BaseModel):
     recipient_nickname: str = ""
     message_content: str = ""
     message_type: int = 0
+
+
+class PostCallRequest(BaseModel):
+    sender_nickname: str = Field(min_length=1, max_length=80)
+    device_id: str = Field(min_length=1, max_length=256)
+    recipient_nickname: str = Field(min_length=1, max_length=80)
+    call_type: Literal["audio", "video"]
+    action: Literal["start", "join", "end", "decline", "cancel", "busy"]
+    call_id: str = Field(default="", max_length=64)
+
+    @field_validator("sender_nickname", "device_id", "recipient_nickname")
+    @classmethod
+    def normalize_nickname(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Nickname cannot be empty")
+        return value
+
+    @field_validator("call_id")
+    @classmethod
+    def normalize_call_id(cls, value: str) -> str:
+        return value.strip()
+
+
+class CallResponse(BaseModel):
+    call_id: str = ""
+    room_name: str = ""
+    livekit_url: str = ""
+    url: str = ""
+    token: str = ""
+    call_type: str = ""
+    status: str = ""
     
     
 class FilePathResponse(BaseModel):
@@ -319,6 +358,189 @@ def post_message(body: PostMessageRequest):
         recipient_nickname=row["recipient_nickname"],
         recipient_user_type=(db.get_user_type(row["recipient_nickname"]) or 0),
         timestamp_unix=row["timestamp_unix"],
+    )
+
+
+@api_router.post("/call", response_model=CallResponse)
+def post_call(body: PostCallRequest) -> CallResponse:
+    if body.sender_nickname == body.recipient_nickname:
+        raise HTTPException(
+            status_code=400,
+            detail="Sender and recipient must be different",
+        )
+
+    sender = db.get_user_by_nickname(body.sender_nickname)
+    recipient = db.get_user_by_nickname(body.recipient_nickname)
+    if sender is None or recipient is None:
+        raise HTTPException(status_code=404, detail="Call participant not found")
+    if not sender["device_id"] or not hmac.compare_digest(
+        str(sender["device_id"]),
+        body.device_id,
+    ):
+        raise HTTPException(status_code=403, detail="Device identity does not match")
+    ensure_user_is_not_blocked(body.sender_nickname)
+    ensure_user_is_not_blocked(body.recipient_nickname)
+
+    now = int(time.time())
+    if body.action == "start":
+        if not db.are_contacts(body.sender_nickname, body.recipient_nickname):
+            raise HTTPException(
+                status_code=403,
+                detail="Calls are only available between contacts",
+            )
+        recipient_token = str(recipient["fcm_token"]).strip()
+        if not recipient_token:
+            raise HTTPException(
+                status_code=409,
+                detail="Recipient has not registered for call notifications",
+            )
+        try:
+            livekit_url, api_key, api_secret = livekit_configuration()
+        except LiveKitConfigurationError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+        call_id = uuid.uuid4().hex
+        room_name = f"shelfa-{call_id}"
+        if not db.create_call_session(
+            call_id,
+            room_name,
+            body.sender_nickname,
+            body.recipient_nickname,
+            body.call_type,
+            now,
+        ):
+            return CallResponse(call_type=body.call_type, status="busy")
+
+        try:
+            fcm.send_alert_notification(
+                token=recipient_token,
+                title=f"Incoming {body.call_type} call",
+                body=f"{body.sender_nickname} is calling you",
+                data={
+                    "type": "call",
+                    "action": "invite",
+                    "call_id": call_id,
+                    "room_name": room_name,
+                    "call_type": body.call_type,
+                    "sender_nickname": body.sender_nickname,
+                    "recipient_nickname": body.recipient_nickname,
+                },
+            )
+        except Exception as error:
+            logger.exception(
+                "Failed to send call invite from %s to %s",
+                body.sender_nickname,
+                body.recipient_nickname,
+            )
+            db.transition_call_session(
+                call_id,
+                body.sender_nickname,
+                body.recipient_nickname,
+                "cancel",
+                body.call_type,
+                now,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Unable to notify the recipient about this call",
+            ) from error
+
+        return CallResponse(
+            call_id=call_id,
+            room_name=room_name,
+            livekit_url=livekit_url,
+            token=create_participant_token(
+                api_key,
+                api_secret,
+                room_name,
+                call_id,
+                body.sender_nickname,
+                body.call_type,
+                now,
+            ),
+            call_type=body.call_type,
+            status="ringing",
+        )
+
+    if not body.call_id:
+        raise HTTPException(status_code=422, detail="call_id is required")
+    try:
+        call, changed = db.transition_call_session(
+            body.call_id,
+            body.sender_nickname,
+            body.recipient_nickname,
+            body.action,
+            body.call_type,
+            now,
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if call is None:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if body.action == "join":
+        try:
+            livekit_url, api_key, api_secret = livekit_configuration()
+        except LiveKitConfigurationError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        if call["status"] != "active":
+            raise HTTPException(status_code=409, detail="Call is no longer available")
+        return CallResponse(
+            call_id=call["call_id"],
+            room_name=call["room_name"],
+            livekit_url=livekit_url,
+            token=create_participant_token(
+                api_key,
+                api_secret,
+                call["room_name"],
+                call["call_id"],
+                body.sender_nickname,
+                call["call_type"],
+                now,
+            ),
+            call_type=call["call_type"],
+            status=call["status"],
+        )
+
+    if changed:
+        other_nickname = (
+            call["callee_nickname"]
+            if body.sender_nickname == call["caller_nickname"]
+            else call["caller_nickname"]
+        )
+        other = db.get_user_by_nickname(other_nickname)
+        if other is not None:
+            try:
+                fcm.send_background_notification(
+                    token=other["fcm_token"],
+                    data={
+                        "type": "call",
+                        "action": body.action,
+                        "call_id": call["call_id"],
+                        "room_name": call["room_name"],
+                        "call_type": call["call_type"],
+                        "sender_nickname": body.sender_nickname,
+                        "recipient_nickname": other_nickname,
+                    },
+                )
+            except Exception as error:
+                logger.exception(
+                    "Failed to send call %s signal to %s",
+                    body.action,
+                    other_nickname,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="Call state was updated but the other participant "
+                    "could not be notified",
+                ) from error
+
+    return CallResponse(
+        call_id=call["call_id"],
+        room_name=call["room_name"],
+        call_type=call["call_type"],
+        status=call["status"],
     )
 
 
