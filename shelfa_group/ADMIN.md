@@ -42,6 +42,25 @@ environment variables before enabling calls:
 - `LIVEKIT_API_KEY`: the LiveKit API key.
 - `LIVEKIT_API_SECRET`: the LiveKit API secret (at least 32 bytes).
 
+The application reads these values from its process environment; it does not
+load `.env` automatically. For local development, copy the root `.env.example`
+to `.env`, fill in the values, and export them in the shell before starting the
+app (for example, `set -a; . ./.env; set +a`). Keep `.env` private; it is
+git-ignored.
+
+For systemd, put the values in a protected environment file such as
+`/etc/shelfa/livekit.env` and add this to the `liveKit.service` unit or its
+drop-in:
+
+```ini
+[Service]
+EnvironmentFile=/etc/shelfa/livekit.env
+```
+
+Set the file permissions so only the service administrator can read it, then
+reload systemd and restart the service. Use `wss://` for production; plain
+`ws://` does not encrypt signaling traffic.
+
 The client posts to `/shelfa/call` with `sender_nickname`, `device_id`,
 `recipient_nickname`, `call_type` (`audio` or `video`), and `action`
 (`start`, `join`, `end`, `decline`, `cancel`, or `busy`); all actions except
