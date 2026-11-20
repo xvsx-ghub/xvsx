@@ -9,6 +9,32 @@ from shelfa_group.config import FIREBASE_AUTH_PATH
 
 logger = logging.getLogger("shelfa")
 
+_CALL_TYPES = {"call", "livekit", "livekit_call"}
+_TERMINAL_CALL_ACTIONS = {
+    "end",
+    "hangup",
+    "leave",
+    "decline",
+    "reject",
+    "rejected",
+    "cancel",
+    "canceled",
+    "cancelled",
+    "busy",
+}
+
+
+def _is_call_invite(data: Mapping[str, Any] | None) -> bool:
+    if not data:
+        return False
+    kind = str(
+        data.get("type") or data.get("message_type") or data.get("event") or ""
+    ).lower()
+    if kind not in _CALL_TYPES:
+        return False
+    action = str(data.get("action") or data.get("call_action") or "invite").lower()
+    return action not in _TERMINAL_CALL_ACTIONS
+
 
 def init(app_name: str = "shelfa_group") -> bool:
     logger.info("fcm: init(). Initializing Firebase app %s...", app_name)
@@ -70,10 +96,19 @@ def send_alert_notification(
     if badge is not None:
         payload["badge"] = str(badge)
 
+    call_invite = _is_call_invite(data)
     aps_kwargs = {
         "alert": messaging.ApsAlert(title=title, body=body),
-        "sound": "default",
+        "sound": "incoming_call.wav" if call_invite else "default",
     }
+    apns_headers = None
+    if call_invite:
+        aps_kwargs["mutable_content"] = True
+        aps_kwargs["category"] = "INCOMING_CALL"
+        apns_headers = {
+            "apns-push-type": "alert",
+            "apns-priority": "10",
+        }
     if badge is not None:
         aps_kwargs["badge"] = badge
 
@@ -83,6 +118,7 @@ def send_alert_notification(
         token=token,
         android=messaging.AndroidConfig(priority="high"),
         apns=messaging.APNSConfig(
+            headers=apns_headers,
             payload=messaging.APNSPayload(
                 aps=messaging.Aps(**aps_kwargs),
             ),
