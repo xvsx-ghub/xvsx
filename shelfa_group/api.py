@@ -382,6 +382,11 @@ def post_call(body: PostCallRequest) -> CallResponse:
     ensure_user_is_not_blocked(body.recipient_nickname)
 
     now = int(time.time())
+    if (
+        body.action == "start"
+        and db.get_user_type(body.recipient_nickname) == db.GROUP_USER_TYPE
+    ):
+        return start_group_call(body, now)
     if body.action == "start":
         if not db.are_contacts(body.sender_nickname, body.recipient_nickname):
             raise HTTPException(
@@ -465,7 +470,7 @@ def post_call(body: PostCallRequest) -> CallResponse:
     if not body.call_id:
         raise HTTPException(status_code=422, detail="call_id is required")
     try:
-        call, changed = db.transition_call_session(
+        call, changed, notify = db.transition_call_session(
             body.call_id,
             body.sender_nickname,
             body.recipient_nickname,
@@ -504,25 +509,31 @@ def post_call(body: PostCallRequest) -> CallResponse:
         )
 
     if changed:
-        other_nickname = (
+        group_name = (
             call["callee_nickname"]
-            if body.sender_nickname == call["caller_nickname"]
-            else call["caller_nickname"]
+            if db.get_user_type(call["callee_nickname"]) == db.GROUP_USER_TYPE
+            else ""
         )
-        other = db.get_user_by_nickname(other_nickname)
-        if other is not None:
+        for other_nickname in notify:
+            other = db.get_user_by_nickname(other_nickname)
+            if other is None or not str(other["fcm_token"]).strip():
+                continue
+            data = {
+                "type": "call",
+                "action": body.action,
+                "call_id": call["call_id"],
+                "room_name": call["room_name"],
+                "call_type": call["call_type"],
+                "sender_nickname": body.sender_nickname,
+                "recipient_nickname": other_nickname,
+            }
+            if group_name:
+                data["group_name"] = group_name
+                data["recipient_nickname"] = group_name
             try:
                 fcm.send_background_notification(
                     token=other["fcm_token"],
-                    data={
-                        "type": "call",
-                        "action": body.action,
-                        "call_id": call["call_id"],
-                        "room_name": call["room_name"],
-                        "call_type": call["call_type"],
-                        "sender_nickname": body.sender_nickname,
-                        "recipient_nickname": other_nickname,
-                    },
+                    data=data,
                 )
             except Exception as error:
                 logger.exception(
@@ -541,6 +552,106 @@ def post_call(body: PostCallRequest) -> CallResponse:
         room_name=call["room_name"],
         call_type=call["call_type"],
         status=call["status"],
+    )
+
+
+def start_group_call(body: PostCallRequest, now: int) -> CallResponse:
+    members = db.group_call_members(body.recipient_nickname)
+    if body.sender_nickname not in members:
+        raise HTTPException(
+            status_code=403,
+            detail="Only group members can start a call",
+        )
+    invitees = []
+    for nickname in members:
+        if nickname == body.sender_nickname:
+            continue
+        user = db.get_user_by_nickname(nickname)
+        if user is None or not str(user["fcm_token"]).strip():
+            continue
+        invitees.append(user)
+    if not invitees:
+        raise HTTPException(
+            status_code=409,
+            detail="Nobody in this group can be called",
+        )
+    try:
+        livekit_url, api_key, api_secret = livekit_configuration()
+    except LiveKitConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    call_id = uuid.uuid4().hex
+    room_name = f"shelfa-{call_id}"
+    if not db.create_call_session(
+        call_id,
+        room_name,
+        body.sender_nickname,
+        body.recipient_nickname,
+        body.call_type,
+        now,
+    ):
+        return CallResponse(call_type=body.call_type, status="busy")
+
+    db.set_call_participants(
+        call_id,
+        {
+            body.sender_nickname: "joined",
+            **{str(user["user_nickname"]): "invited" for user in invitees},
+        },
+    )
+    sent = 0
+    for user in invitees:
+        try:
+            fcm.send_alert_notification(
+                token=str(user["fcm_token"]),
+                title=f"Incoming {body.call_type} call",
+                body=f"{body.sender_nickname} is calling {body.recipient_nickname}",
+                data={
+                    "type": "call",
+                    "action": "invite",
+                    "call_id": call_id,
+                    "room_name": room_name,
+                    "call_type": body.call_type,
+                    "sender_nickname": body.sender_nickname,
+                    "recipient_nickname": body.recipient_nickname,
+                    "group_name": body.recipient_nickname,
+                },
+            )
+            sent += 1
+        except Exception:
+            logger.exception(
+                "Failed to send group call invite from %s to %s",
+                body.sender_nickname,
+                user["user_nickname"],
+            )
+    if sent == 0:
+        db.transition_call_session(
+            call_id,
+            body.sender_nickname,
+            body.recipient_nickname,
+            "cancel",
+            body.call_type,
+            now,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to notify the group about this call",
+        )
+    return CallResponse(
+        call_id=call_id,
+        room_name=room_name,
+        livekit_url=livekit_url,
+        token=create_participant_token(
+            api_key,
+            api_secret,
+            room_name,
+            call_id,
+            body.sender_nickname,
+            body.call_type,
+            now,
+        ),
+        call_type=body.call_type,
+        status="ringing",
     )
 
 

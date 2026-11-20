@@ -116,6 +116,16 @@ def init() -> None:
             ON call_session (caller_nickname, callee_nickname, status)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS call_participant (
+                call_id TEXT NOT NULL,
+                nickname TEXT NOT NULL,
+                state TEXT NOT NULL,
+                PRIMARY KEY (call_id, nickname)
+            )
+            """
+        )
         user_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(user)")
         }
@@ -491,6 +501,32 @@ def create_call_session(
         return True
 
 
+def group_call_members(group_nickname: str) -> list[str]:
+    names = set(get_contact_nickname_list(group_nickname))
+    names.update(get_sender_nickname_list(group_nickname))
+    members = []
+    for nickname in sorted(names):
+        if nickname == group_nickname:
+            continue
+        user = get_user_by_nickname(nickname)
+        if user is None or user["is_blocked"] or user["user_type"] == GROUP_USER_TYPE:
+            continue
+        members.append(nickname)
+    return members
+
+
+def set_call_participants(call_id: str, states: dict[str, str]) -> None:
+    with get_db() as conn:
+        conn.executemany(
+            """
+            INSERT INTO call_participant (call_id, nickname, state)
+            VALUES (?, ?, ?)
+            """,
+            [(call_id, nickname, state) for nickname, state in states.items()],
+        )
+        conn.commit()
+
+
 def transition_call_session(
     call_id: str,
     actor_nickname: str,
@@ -498,7 +534,7 @@ def transition_call_session(
     action: str,
     call_type: str,
     now: int,
-) -> tuple[dict | None, bool]:
+) -> tuple[dict | None, bool, list[str]]:
     with get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
@@ -516,10 +552,19 @@ def transition_call_session(
         ).fetchone()
         if row is None:
             conn.commit()
-            return None, False
+            return None, False, []
         if row["call_type"] != call_type:
             conn.commit()
             raise ValueError("Call type does not match")
+        if get_user_type(row["callee_nickname"]) == GROUP_USER_TYPE:
+            return _transition_group_call(
+                conn,
+                row,
+                actor_nickname,
+                other_nickname,
+                action,
+                now,
+            )
 
         actor_is_caller = (
             actor_nickname == row["caller_nickname"]
@@ -542,7 +587,7 @@ def transition_call_session(
         status = row["status"]
         if status not in {"ringing", "active"}:
             conn.commit()
-            return dict(row), False
+            return dict(row), False, []
 
         if action == "join":
             if status != "ringing":
@@ -569,8 +614,133 @@ def transition_call_session(
             "SELECT * FROM call_session WHERE call_id = ?",
             (call_id,),
         ).fetchone()
+        other = (
+            row["callee_nickname"]
+            if actor_nickname == row["caller_nickname"]
+            else row["caller_nickname"]
+        )
         conn.commit()
-        return dict(updated), True
+        return dict(updated), True, [other]
+
+
+def _participant_states(conn: sqlite3.Connection, call_id: str) -> dict[str, str]:
+    rows = conn.execute(
+        "SELECT nickname, state FROM call_participant WHERE call_id = ?",
+        (call_id,),
+    ).fetchall()
+    return {row["nickname"]: row["state"] for row in rows}
+
+
+def _set_participant_state(
+    conn: sqlite3.Connection,
+    call_id: str,
+    nickname: str,
+    state: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE call_participant SET state = ?
+        WHERE call_id = ? AND nickname = ?
+        """,
+        (state, call_id, nickname),
+    )
+
+
+def _transition_group_call(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    actor: str,
+    other: str,
+    action: str,
+    now: int,
+) -> tuple[dict, bool, list[str]]:
+    call_id = row["call_id"]
+    group = row["callee_nickname"]
+    caller = row["caller_nickname"]
+    if other != group:
+        conn.commit()
+        raise PermissionError("User is not a participant in this call")
+    states = _participant_states(conn, call_id)
+    if actor not in states:
+        conn.commit()
+        raise PermissionError("User is not a participant in this call")
+    status = row["status"]
+    if status not in {"ringing", "active"}:
+        conn.commit()
+        return dict(row), False, []
+
+    def others_in(current: dict[str, str], expected: str) -> list[str]:
+        return [
+            nickname
+            for nickname, participant_state in current.items()
+            if nickname != caller and participant_state == expected
+        ]
+
+    notify: list[str] = []
+    next_status = status
+    if action == "join":
+        if actor == caller or states[actor] not in {"invited", "joined"}:
+            conn.commit()
+            raise PermissionError("Only the invited user can perform this action")
+        if states[actor] == "joined" and status == "active":
+            conn.commit()
+            return dict(row), False, []
+        if states[actor] != "invited":
+            conn.commit()
+            raise ValueError("Call is no longer waiting for an answer")
+        _set_participant_state(conn, call_id, actor, "joined")
+        next_status = "active"
+    elif action in {"decline", "busy"}:
+        if actor == caller or states[actor] != "invited":
+            conn.commit()
+            raise PermissionError("Only the invited user can perform this action")
+        participant_state = "declined" if action == "decline" else "busy"
+        _set_participant_state(conn, call_id, actor, participant_state)
+        states[actor] = participant_state
+        if others_in(states, "invited") or others_in(states, "joined"):
+            conn.commit()
+            return dict(row), False, []
+        declined = any(
+            participant_state == "declined"
+            for nickname, participant_state in states.items()
+            if nickname != caller
+        )
+        next_status = "declined" if declined else "busy"
+        notify = [caller]
+    elif action == "cancel":
+        if actor != caller:
+            conn.commit()
+            raise PermissionError("Only the caller can cancel this call")
+        if others_in(states, "joined"):
+            conn.commit()
+            raise ValueError("Call is no longer waiting for an answer")
+        notify = others_in(states, "invited")
+        for nickname in notify:
+            _set_participant_state(conn, call_id, nickname, "left")
+        next_status = "cancelled"
+    else:
+        _set_participant_state(conn, call_id, actor, "left")
+        states[actor] = "left"
+        if any(participant_state == "joined" for participant_state in states.values()):
+            conn.commit()
+            return dict(row), False, []
+        notify = [
+            nickname
+            for nickname, participant_state in states.items()
+            if nickname != actor and participant_state == "invited"
+        ]
+        next_status = "ended"
+
+    conn.execute(
+        "UPDATE call_session SET status = ?, updated_at = ? WHERE call_id = ?",
+        (next_status, now, call_id),
+    )
+    updated = conn.execute(
+        "SELECT * FROM call_session WHERE call_id = ?",
+        (call_id,),
+    ).fetchone()
+    conn.commit()
+    return dict(updated), True, notify
 
 
 def get_account_mode_limits() -> dict[str, dict[str, int]]:

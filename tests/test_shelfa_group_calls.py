@@ -278,3 +278,126 @@ def test_call_validation_and_decline_transition(client, monkeypatch):
     assert declined.status_code == 200
     assert declined.json()["status"] == "declined"
     assert signals[0]["data"]["action"] == "decline"
+
+
+def test_group_call_invites_every_member_and_stays_open(client, monkeypatch):
+    configure_livekit(monkeypatch)
+    db.set_user("family", 2, "group-device", "")
+    db.set_user("ada", 1, "ada-device", "ada-token")
+    db.set_user("bea", 1, "bea-device", "bea-token")
+    db.set_user("cam", 1, "cam-device", "cam-token")
+    db.set_user("nope", 1, "nope-device", "nope-token")
+    db.create_contact("family", "ada")
+    db.create_contact("family", "bea")
+    db.create_contact("family", "cam")
+    invites = []
+    signals = []
+    monkeypatch.setattr(
+        api.fcm,
+        "send_alert_notification",
+        lambda **kwargs: invites.append(kwargs),
+    )
+    monkeypatch.setattr(
+        api.fcm,
+        "send_background_notification",
+        lambda **kwargs: signals.append(kwargs),
+    )
+
+    forbidden = client.post(
+        "/shelfa/call",
+        json={
+            "sender_nickname": "nope",
+            "device_id": "nope-device",
+            "recipient_nickname": "family",
+            "call_type": "video",
+            "action": "start",
+        },
+    )
+    assert forbidden.status_code == 403
+
+    stranger = client.post(
+        "/shelfa/call",
+        json={
+            "sender_nickname": "ada",
+            "device_id": "ada-device",
+            "recipient_nickname": "family",
+            "call_type": "video",
+            "action": "start",
+        },
+    )
+    assert stranger.status_code == 200
+    started = stranger.json()
+    assert started["status"] == "ringing"
+    assert {item["token"] for item in invites} == {"bea-token", "cam-token"}
+    assert invites[0]["data"]["group_name"] == "family"
+    assert invites[0]["data"]["sender_nickname"] == "ada"
+
+    joined = client.post(
+        "/shelfa/call",
+        json={
+            "sender_nickname": "bea",
+            "device_id": "bea-device",
+            "recipient_nickname": "family",
+            "call_type": "video",
+            "action": "join",
+            "call_id": started["call_id"],
+        },
+    )
+    assert joined.status_code == 200
+    assert joined.json()["status"] == "active"
+    assert joined.json()["room_name"] == started["room_name"]
+
+    declined = client.post(
+        "/shelfa/call",
+        json={
+            "sender_nickname": "cam",
+            "device_id": "cam-device",
+            "recipient_nickname": "family",
+            "call_type": "video",
+            "action": "decline",
+            "call_id": started["call_id"],
+        },
+    )
+    assert declined.status_code == 200
+    assert declined.json()["status"] == "active"
+    assert signals == []
+
+    bea_left = client.post(
+        "/shelfa/call",
+        json={
+            "sender_nickname": "bea",
+            "device_id": "bea-device",
+            "recipient_nickname": "family",
+            "call_type": "video",
+            "action": "end",
+            "call_id": started["call_id"],
+        },
+    )
+    assert bea_left.status_code == 200
+    assert bea_left.json()["status"] == "active"
+
+    ended = client.post(
+        "/shelfa/call",
+        json={
+            "sender_nickname": "ada",
+            "device_id": "ada-device",
+            "recipient_nickname": "family",
+            "call_type": "video",
+            "action": "end",
+            "call_id": started["call_id"],
+        },
+    )
+    assert ended.status_code == 200
+    assert ended.json()["status"] == "ended"
+
+    outsider = client.post(
+        "/shelfa/call",
+        json={
+            "sender_nickname": "bea",
+            "device_id": "bea-device",
+            "recipient_nickname": "missing-group",
+            "call_type": "audio",
+            "action": "start",
+        },
+    )
+    assert outsider.status_code == 404

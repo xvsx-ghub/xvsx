@@ -66,6 +66,7 @@ def create_participant_token(
         "sub": identity,
         "nbf": issued_at - 5,
         "exp": issued_at + 4 * 60 * 60,
+        "name": nickname,
         "video": video_grant,
     }
     payload = _base64url(
