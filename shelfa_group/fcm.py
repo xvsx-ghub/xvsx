@@ -97,32 +97,37 @@ def send_alert_notification(
         payload["badge"] = str(badge)
 
     call_invite = _is_call_invite(data)
-    aps_kwargs = {
-        "alert": messaging.ApsAlert(title=title, body=body),
-        "sound": "incoming_call.wav" if call_invite else "default",
-    }
-    apns_headers = None
     if call_invite:
-        aps_kwargs["mutable_content"] = True
-        aps_kwargs["content_available"] = True
-        aps_kwargs["category"] = "INCOMING_CALL"
+        # Data only. An Android or APNs alert is displayed by iOS as the FCM banner
+        # next to CallKit. Android still receives a high-priority data message.
+        payload["notification_kind"] = "background"
+        payload.pop("title", None)
+        payload.pop("body", None)
+        aps = messaging.Aps(content_available=True)
         apns_headers = {
-            "apns-push-type": "alert",
-            "apns-priority": "10",
+            "apns-push-type": "background",
+            "apns-priority": "5",
         }
-    if badge is not None:
-        aps_kwargs["badge"] = badge
+        notification = None
+    else:
+        aps_kwargs = {
+            "alert": messaging.ApsAlert(title=title, body=body),
+            "sound": "default",
+        }
+        if badge is not None:
+            aps_kwargs["badge"] = badge
+        aps = messaging.Aps(**aps_kwargs)
+        apns_headers = None
+        notification = messaging.Notification(title=title, body=body)
 
     message = messaging.Message(
-        notification=messaging.Notification(title=title, body=body),
+        notification=notification,
         data=payload,
         token=token,
         android=messaging.AndroidConfig(priority="high"),
         apns=messaging.APNSConfig(
             headers=apns_headers,
-            payload=messaging.APNSPayload(
-                aps=messaging.Aps(**aps_kwargs),
-            ),
+            payload=messaging.APNSPayload(aps=aps),
         ),
     )
 
