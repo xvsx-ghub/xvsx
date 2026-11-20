@@ -47,6 +47,7 @@ def test_call_invite_uses_ios_ringtone(monkeypatch):
     aps = seen["message"].apns.payload.aps
     assert aps.sound == "incoming_call.wav"
     assert aps.mutable_content is True
+    assert aps.content_available is True
     assert aps.category == "INCOMING_CALL"
     assert seen["message"].apns.headers["apns-priority"] == "10"
     assert seen["message"].data["type"] == "call"

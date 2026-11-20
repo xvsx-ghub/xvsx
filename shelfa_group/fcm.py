@@ -104,6 +104,7 @@ def send_alert_notification(
     apns_headers = None
     if call_invite:
         aps_kwargs["mutable_content"] = True
+        aps_kwargs["content_available"] = True
         aps_kwargs["category"] = "INCOMING_CALL"
         apns_headers = {
             "apns-push-type": "alert",
