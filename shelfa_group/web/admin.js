@@ -191,7 +191,14 @@ function renderUser(user) {
   const nickname = escapeHtml(user.user_nickname);
   const type = Number(user.user_type) === 2 ? "Group" : "Person";
   const mode = ["free", "limited", "premium"].includes(user.account_mode) ? user.account_mode : "free";
-  const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1);
+  const source = user.entitlement_source === "ADMIN_OVERRIDE"
+    ? "Admin"
+    : user.entitlement_source === "GOOGLE_SUBSCRIPTION"
+      ? "Google"
+      : user.entitlement_source === "APPLE_SUBSCRIPTION"
+        ? "Apple"
+        : "";
+  const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1) + (source ? ` · ${source}` : "");
   const blocked = Boolean(user.is_blocked);
   const initials = nickname.slice(0, 2).toUpperCase();
   return `<tr>
@@ -276,6 +283,9 @@ function openCreateUser() {
   document.getElementById("user-dialog-description").textContent = "Add a person or group to the workspace.";
   document.getElementById("nickname-field").hidden = false;
   document.getElementById("blocked-field").hidden = true;
+  document.getElementById("clear-override-field").hidden = true;
+  document.getElementById("override-expiry-field").hidden = true;
+  form.elements.original_account_mode.value = "";
   document.getElementById("save-user-button").textContent = "Create user";
   document.getElementById("user-dialog").showModal();
   form.elements.user_nickname.focus();
@@ -289,6 +299,11 @@ function openEditUser(button) {
   form.elements.user_nickname.required = false;
   form.elements.user_type.value = button.dataset.type;
   form.elements.account_mode.value = button.dataset.mode;
+  form.elements.original_account_mode.value = button.dataset.mode;
+  document.getElementById("clear-override-field").hidden = false;
+  document.getElementById("override-expiry-field").hidden = false;
+  form.elements.clear_admin_override.checked = false;
+  form.elements.admin_override_expires_at.value = "";
   form.elements.user_type.disabled = false;
   form.elements.is_blocked.checked = button.dataset.blocked === "true";
   document.getElementById("user-dialog-kicker").textContent = "ACCOUNT SETTINGS";
@@ -352,6 +367,23 @@ document.getElementById("contacts-table").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");
   if (button) handleTableAction(button).catch((error) => showToast(error.message, true));
 });
+function accountUpdatePayload(form) {
+  const payload = {
+    user_type: Number(form.elements.user_type.value),
+    is_blocked: form.elements.is_blocked.checked,
+  };
+  if (form.elements.clear_admin_override.checked) {
+    payload.clear_admin_override = true;
+    return payload;
+  }
+  if (form.elements.account_mode.value !== form.elements.original_account_mode.value) {
+    payload.account_mode = form.elements.account_mode.value;
+    const expiry = form.elements.admin_override_expires_at.value.trim();
+    if (expiry) payload.admin_override_expires_at = Number(expiry);
+  }
+  return payload;
+}
+
 document.getElementById("user-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -362,11 +394,7 @@ document.getElementById("user-form").addEventListener("submit", async (event) =>
     if (userId) {
       await request(`/users/${userId}`, {
         method: "PATCH",
-        body: JSON.stringify({
-          user_type: Number(form.elements.user_type.value),
-          account_mode: form.elements.account_mode.value,
-          is_blocked: form.elements.is_blocked.checked,
-        }),
+        body: JSON.stringify(accountUpdatePayload(form)),
       });
       showToast("Account updated.");
     } else {

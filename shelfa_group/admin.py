@@ -69,6 +69,8 @@ class UpdateUserRequest(BaseModel):
     user_type: int | None = Field(default=None, ge=1, le=2)
     is_blocked: bool | None = None
     account_mode: Literal["free", "limited", "premium"] | None = None
+    admin_override_expires_at: int | None = None
+    clear_admin_override: bool = False
 
 
 class AccountModeLimits(BaseModel):
@@ -367,6 +369,7 @@ def update_user(
         body.user_type is None
         and body.is_blocked is None
         and body.account_mode is None
+        and not body.clear_admin_override
     ):
         raise HTTPException(status_code=422, detail="No user changes were provided")
     result = db.admin_update_user(
@@ -375,6 +378,8 @@ def update_user(
         body.user_type,
         body.is_blocked,
         body.account_mode,
+        body.admin_override_expires_at,
+        body.clear_admin_override,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="User not found")

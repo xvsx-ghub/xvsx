@@ -116,7 +116,10 @@
       <label class="field" id="nickname-field"><span>Nickname</span><input name="user_nickname" maxlength="80" required placeholder="e.g. team-design"></label>
       <label class="field"><span>Account type</span><select name="user_type"><option value="1">Person</option><option value="2">Group</option></select></label>
       <label class="field"><span>Account mode</span><select name="account_mode"><option value="free">Free</option><option value="limited">Limited</option><option value="premium">Premium</option></select></label>
+      <label class="field" id="override-expiry-field"><span>Override expiry (UTC unix, optional)</span><input name="admin_override_expires_at" inputmode="numeric" placeholder="Leave empty for no expiry"></label>
+      <label class="check-field" id="clear-override-field"><input type="checkbox" name="clear_admin_override"><span><strong>Clear administrator override</strong><small>The effective plan then follows an active store subscription, or Free. This does not cancel the store subscription.</small></span></label>
       <label class="check-field" id="blocked-field"><input type="checkbox" name="is_blocked"><span><strong>Block account</strong><small>Blocked accounts cannot use identity, messaging, or contact endpoints.</small></span></label>
+      <input type="hidden" name="original_account_mode">
       <input type="hidden" name="user_id">
       <div class="modal-actions"><button type="button" class="button button-secondary" id="cancel-user-dialog">Cancel</button><button type="submit" class="button button-primary" id="save-user-button">Create user</button></div>
     </form>

@@ -95,6 +95,26 @@ and a CSRF token required for state-changing requests. Credential values and
 session tokens are not written to the audit log. Successful sign-ins, failed
 sign-in attempts, sign-outs, and data changes are recorded in `admin_audit`.
 
+## Subscriptions and administrator plans
+
+Paid Limited and Premium plans are activated only after the backend verifies a
+purchase with Apple or Google. `user.account_mode` remains the effective plan
+enforced by the existing contact and message-history limits. An administrator
+assignment is stored separately as `admin_override_plan` and takes priority
+over an active store subscription until it is cleared or its optional expiry
+passes. Changing or clearing an override does not cancel the store
+subscription. Existing non-free accounts were migrated once to administrator
+overrides so their current plans stay in effect.
+
+The account editor sends a new account mode only when the selection changes.
+Use "Clear administrator override" to return the account to its store
+subscription, or to Free when there is no active subscription. Override expiry
+is a UTC unix timestamp. The user list shows whether the effective plan comes
+from an administrator, Google Play, or the App Store.
+
+Store setup, credentials, and the mobile purchase flow are documented in
+`SUBSCRIPTIONS.md`.
+
 ## Account and API behavior
 
 Creating an account provisions its nickname and type without a device token;

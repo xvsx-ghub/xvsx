@@ -198,6 +198,9 @@ def init() -> None:
             )
             """
         )
+        from shelfa_group import subscription_db
+
+        subscription_db.migrate(conn)
         conn.commit()
 
 
@@ -1198,7 +1201,7 @@ def admin_list_users(
             f"SELECT COUNT(*) FROM user u WHERE {where}",
             f"""
             SELECT u.id, u.user_nickname, u.user_type, u.is_blocked,
-                   u.account_mode,
+                   u.account_mode, u.entitlement_source, u.admin_override_plan,
                    (SELECT COUNT(*) FROM message m
                     WHERE m.sender_nickname = u.user_nickname
                        OR m.recipient_nickname = u.user_nickname) AS message_count,
@@ -1221,14 +1224,19 @@ def admin_create_user(
     account_mode: str = FREE_ACCOUNT_MODE,
 ) -> dict:
     with get_db() as conn:
+        override_plan = None if account_mode == FREE_ACCOUNT_MODE else account_mode
+        entitlement_source = (
+            "FREE" if override_plan is None else "ADMIN_OVERRIDE"
+        )
         cursor = conn.execute(
             """
             INSERT INTO user (
-                user_nickname, user_type, device_id, fcm_token, account_mode
+                user_nickname, user_type, device_id, fcm_token, account_mode,
+                admin_override_plan, entitlement_source
             )
-            VALUES (?, ?, '', '', ?)
+            VALUES (?, ?, '', '', ?, ?, ?)
             """,
-            (nickname, user_type, account_mode),
+            (nickname, user_type, account_mode, override_plan, entitlement_source),
         )
         user_id = cursor.lastrowid
         _admin_audit(
@@ -1261,11 +1269,16 @@ def admin_update_user(
     user_type: int | None,
     is_blocked: bool | None,
     account_mode: str | None = None,
+    admin_override_expires_at: int | None = None,
+    clear_admin_override: bool = False,
 ) -> dict | None:
+    from shelfa_group import subscription_db
+
     with get_db() as conn:
         row = conn.execute(
             """
-            SELECT id, user_nickname, user_type, is_blocked, account_mode
+            SELECT id, user_nickname, user_type, is_blocked, account_mode,
+                   admin_override_plan, entitlement_source
             FROM user WHERE id = ?
             """,
             (user_id,),
@@ -1276,15 +1289,29 @@ def admin_update_user(
         updated_blocked = (
             int(is_blocked) if is_blocked is not None else row["is_blocked"]
         )
-        updated_mode = account_mode if account_mode is not None else row["account_mode"]
         conn.execute(
             """
             UPDATE user
-            SET user_type = ?, is_blocked = ?, account_mode = ?
+            SET user_type = ?, is_blocked = ?
             WHERE id = ?
             """,
-            (updated_type, updated_blocked, updated_mode, user_id),
+            (updated_type, updated_blocked, user_id),
         )
+        if clear_admin_override:
+            subscription_db.clear_admin_override(conn, user_id)
+        elif account_mode is not None:
+            subscription_db.set_admin_override(
+                conn,
+                user_id,
+                account_mode,
+                admin_override_expires_at,
+            )
+        else:
+            subscription_db.recompute_entitlement(conn, user_id)
+        updated = conn.execute(
+            "SELECT account_mode, entitlement_source, admin_override_plan FROM user WHERE id = ?",
+            (user_id,),
+        ).fetchone()
         _admin_audit(
             conn,
             actor,
@@ -1295,7 +1322,11 @@ def admin_update_user(
                 "nickname": row["user_nickname"],
                 "user_type": updated_type,
                 "is_blocked": bool(updated_blocked),
-                "account_mode": updated_mode,
+                "account_mode": updated["account_mode"],
+                "previous_account_mode": row["account_mode"],
+                "entitlement_source": updated["entitlement_source"],
+                "admin_override_plan": updated["admin_override_plan"],
+                "clear_admin_override": clear_admin_override,
             },
         )
         conn.commit()
@@ -1304,7 +1335,9 @@ def admin_update_user(
             "user_nickname": row["user_nickname"],
             "user_type": updated_type,
             "is_blocked": updated_blocked,
-            "account_mode": updated_mode,
+            "account_mode": updated["account_mode"],
+            "entitlement_source": updated["entitlement_source"],
+            "admin_override_plan": updated["admin_override_plan"],
         }
 
 
@@ -1370,6 +1403,11 @@ def admin_delete_user(actor: str, user_id: int) -> dict | None:
             """,
             (nickname, nickname),
         )
+        conn.execute(
+            "DELETE FROM subscription_events WHERE user_id = ?",
+            (user_id,),
+        )
+        conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM user WHERE id = ?", (user_id,))
         _admin_audit(
             conn,
